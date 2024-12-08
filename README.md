@@ -1,6 +1,6 @@
 <div align="center">
-    <h1>Scuffle</h1>
-    <h3>A next-generation open-source cloud provider</h3>
+    <h1>Scuffle Perf</h1>
+    <h3>A continuous integration performance monitoring tool</h3>
 </div>
 
 <p align="center">
@@ -32,10 +32,9 @@
 
 ---
 
-Welcome to **Scuffle**—a next-generation **open-source cloud provider**! 🚀
+Scuffle perf is a application designed for tracking the performance of continuous integration pipelines.
 
-We're on a mission to revolutionize **video streaming solutions** with cutting-edge tools and libraries. Dive in and explore what we have to offer! 🔗 [Visit our website](https://scuffle.cloud) to learn more.
-
+Inspired by [rustc-perf](https://github.com/rust-lang/rustc-perf).
 
 ---
 
@@ -82,7 +81,7 @@ Your security is our priority. 🔒 Refer to our [**Security Policy**](./.github
 
 ## 📋 Additional Resources
 
-- 🔍 [**Public Issue Tracker**](https://jira.scuffle.cloud)
+- 🔍 [**Public Issue Tracker**](https://jira.atlassian.scuffle.cloud/browse/PERF)
 - 📊 [**Kanban Board**](https://scuffle.notion.site)
 - 📰 [**Scuffle Blog**](https://bytes.scuffle.cloud)
 

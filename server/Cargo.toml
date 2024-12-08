@@ -1,13 +1,13 @@
 [package]
-name = "scuffle-perf-cli"
+name = "scuffle-perf-server"
 version = "0.1.0"
 edition = "2021"
 repository = "https://github.com/scufflecloud/perf"
 authors = ["Scuffle <opensource@scuffle.cloud>"]
 readme = "README.md"
-documentation = "https://docs.rs/scuffle-perf-cli"
+documentation = "https://docs.rs/scuffle-perf-server"
 license = "MIT OR Apache-2.0"
-description = "A cli tool to upload performance data to Scuffle Perf"
+description = "A continuous integration performance monitoring tool server"
 keywords = ["performance", "monitoring", "ci"]
 
 [dependencies]

@@ -1,7 +1,3 @@
-# An alias for cargo +nightly xtask check
-powerset *args:
-    cargo +nightly xtask powerset {{args}}
-
 # An alias for cargo +nightly fmt --all
 fmt *args:
     cargo +nightly fmt --all {{args}}

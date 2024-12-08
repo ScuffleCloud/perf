@@ -51,6 +51,31 @@ jobs:
       - name: Make sure code is formatted
         run: cargo +nightly fmt --check
 
+  hakari:
+    name: Hakari
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        id: setup-rust
+        with:
+          toolchain: nightly
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hakari
+
+      - name: Make sure Hakari is up-to-date
+        run: |
+          set -xeo pipefail
+
+          cargo hakari manage-deps --dry-run
+          cargo hakari generate --diff
+          cargo hakari verify
+
   test:
     name: Test
     runs-on: ubuntu-24.04

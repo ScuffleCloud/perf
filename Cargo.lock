@@ -3,9 +3,19 @@
 version = 4
 
 [[package]]
-name = "scuffle-perf"
+name = "scuffle-perf-cli"
 version = "0.1.0"
+dependencies = [
+ "scuffle-workspace-hack",
+]
 
 [[package]]
-name = "scuffle-perf-cli"
+name = "scuffle-perf-server"
+version = "0.1.0"
+dependencies = [
+ "scuffle-workspace-hack",
+]
+
+[[package]]
+name = "scuffle-workspace-hack"
 version = "0.1.0"
