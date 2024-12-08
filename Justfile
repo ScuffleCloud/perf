@@ -1,3 +1,5 @@
+mod? local;
+
 # An alias for cargo +nightly fmt --all
 fmt *args:
     cargo +nightly fmt --all {{args}}

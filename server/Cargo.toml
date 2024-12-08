@@ -10,5 +10,20 @@ license = "MIT OR Apache-2.0"
 description = "A continuous integration performance monitoring tool server"
 keywords = ["performance", "monitoring", "ci"]
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
+
 [dependencies]
 scuffle-workspace-hack.workspace = true
+scuffle-bootstrap = "0.0.2"
+scuffle-settings = { version = "0.0.2", features = ["bootstrap"] }
+scuffle-context = "0.0.2"
+scuffle-signal = { version = "0.0.2", features = ["bootstrap"] }
+scuffle-metrics = { version = "0.0.4", features = ["prometheus"] }
+scuffle-bootstrap-telemetry = "0.0.3"
+tokio = { version = "1.42.0", features = ["full"] }
+smart-default = "0.7.1"
+serde = { version = "1.0.215", features = ["derive"] }
+anyhow = "1.0.85"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.1", features = ["env-filter"] }

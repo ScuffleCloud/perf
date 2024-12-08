@@ -11,8 +11,4 @@ local/
 coverage/
 benchmark.txt
 .aliases
-
-
-# Added by cargo
-
-/target
+local.just
