@@ -1,0 +1,20 @@
+[workspace]
+members = [
+    "cli",
+]
+
+resolver = "2"
+
+[package]
+name = "scuffle-perf"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/scufflecloud/perf"
+authors = ["Scuffle <opensource@scuffle.cloud>"]
+readme = "README.md"
+documentation = "https://docs.rs/scuffle-perf"
+license = "MIT OR Apache-2.0"
+description = "A continuous integration performance monitoring tool"
+keywords = ["performance", "monitoring", "ci"]
+
+[dependencies]
