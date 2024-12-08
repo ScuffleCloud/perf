@@ -15,12 +15,12 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
 
 [dependencies]
 scuffle-workspace-hack.workspace = true
-scuffle-bootstrap = "0.0.1"
-scuffle-settings = { version = "0.0.1", features = ["bootstrap"] }
-scuffle-context = "0.0.1"
-scuffle-signal = { version = "0.0.1", features = ["bootstrap"] }
-scuffle-metrics = { version = "0.0.3", features = ["prometheus"] }
-scuffle-bootstrap-telemetry = "0.0.2"
+scuffle-bootstrap = "0.0.2"
+scuffle-settings = { version = "0.0.2", features = ["bootstrap"] }
+scuffle-context = "0.0.2"
+scuffle-signal = { version = "0.0.2", features = ["bootstrap"] }
+scuffle-metrics = { version = "0.0.4", features = ["prometheus"] }
+scuffle-bootstrap-telemetry = "0.0.3"
 tokio = { version = "1.42.0", features = ["full"] }
 smart-default = "0.7.1"
 serde = { version = "1.0.215", features = ["derive"] }
