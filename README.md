@@ -62,14 +62,12 @@ If you find Scuffle valuable, consider supporting us on [**Open Collective**](ht
 
 ---
 
-## 📜 Licensing Overview
+## 📜 License
 
-Scuffle uses **different licenses** for various components. Here's a quick general overview:
+This project is licensed under the [MIT](./LICENSE.MIT) or [Apache-2.0](./LICENSE.Apache-2.0) license.
+You can choose between one of them if you use this work.
 
-- **Libraries**: Licensed under [MIT](./LICENSE.MIT) or [Apache-2.0](./LICENSE.Apache-2.0).
-- **Executable Binaries**: Licensed under [AGPL-3.0](./LICENSE.AGPL-3.0).
-
-Each component includes specific licensing details in its `README.md` and corresponding license files. For any questions, feel free to [open an issue](https://github.com/ScuffleCloud/scuffle/issues) or email us at [legal@scuffle.cloud](mailto:legal@scuffle.cloud).
+`SPDX-License-Identifier: MIT OR Apache-2.0`
 
 ---
 
