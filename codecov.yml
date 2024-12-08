@@ -1,0 +1,32 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 10%
+
+github_checks:
+  annotations: false
+
+codecov:
+  require_ci_to_pass: false
+  notify:
+    wait_for_ci: false
+
+comment:
+  layout: "header, diff, files, components"
+  behavior: default
+  require_changes: false
+  require_head: no
+  require_base: no
+
+component_management:
+  individual_components:
+    - component_id: scuffle-perf-cli
+      name: scuffle-perf-cli
+      paths:
+        - cli/**
+    - component_id: scuffle-perf-server
+      name: scuffle-perf-server
+      paths:
+        - crates/bootstrap/**

@@ -1,0 +1,11 @@
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+]
+
+unused-allowed-license = "warn"
+confidence-threshold = 0.95
+
+[advisories]
+ignore = []

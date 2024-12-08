@@ -1,0 +1,119 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        id: setup-rust
+        with:
+          toolchain: nightly
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        id: cache-rust
+        with:
+          prefix-key: "v0-rust-${{ steps.setup-rust.outputs.cachekey }}"
+          shared-key: clippy
+
+      - name: Make sure code is linted
+        run: cargo +nightly clippy
+
+  fmt:
+    name: Fmt
+    runs-on: ubuntu-24.04
+    permissions:
+      checks: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        id: setup-rust
+        with:
+          toolchain: nightly
+          components: rustfmt
+
+      - name: Make sure code is formatted
+        run: cargo +nightly fmt --check
+
+  hakari:
+    name: Hakari
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        id: setup-rust
+        with:
+          toolchain: nightly
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hakari
+
+      - name: Make sure Hakari is up-to-date
+        run: |
+          set -xeo pipefail
+
+          cargo hakari manage-deps --dry-run
+          cargo hakari generate --diff
+          cargo hakari verify
+
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        id: setup-rust
+        with:
+          toolchain: nightly
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0-rust-${{ steps.setup-rust.outputs.cachekey }}"
+          shared-key: test
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-llvm-cov
+
+      # Note; we don't run the powerset here because it's very slow on CI
+      # Perhaps we should consider it at some point.
+      - name: Run tests
+        run: cargo +nightly llvm-cov nextest --branch --no-fail-fast --all-features --lcov --output-path ./lcov.info --profile ci
+
+      - uses: codecov/codecov-action@v5
+        with:
+          fail_ci_if_error: true
+          files: ./lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          verbose: true
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          files: ./target/nextest/ci/junit.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
