@@ -1,4 +1,4 @@
-mod? local;
+mod? local
 
 # An alias for cargo +nightly fmt --all
 fmt *args:
@@ -24,6 +24,18 @@ test *args:
 
 deny *args:
     cargo deny {{args}} --all-features check
+
+generate:
+    RUSTUP_TOOLCHAIN=nightly sea-orm-cli generate entity -o server/src/entities
+
+migrate-sqlite *args:
+    sea-orm-cli migrate {{args}} --database-url sqlite:./brawl.db
+
+migrate-postgres *args:
+    sea-orm-cli migrate {{args}} --database-url postgres://brawl:brawl@localhost:5432/brawl
+
+generate-entities *args:
+    RUSTUP_TOOLCHAIN=nightly sea-orm-cli generate entity -o server/src/entities {{args}}
 
 workspace-hack:
     cargo hakari manage-deps
