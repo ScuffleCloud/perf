@@ -1,15 +1,19 @@
 #![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]
-// disable coverage for now.
 #![cfg_attr(all(coverage_nightly, test), coverage(off))]
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
+use diesel::query_dsl::methods::FindDsl;
+use diesel::ExpressionMethods;
+use diesel_async::RunQueryDsl;
 use scuffle_bootstrap_telemetry::opentelemetry;
 use scuffle_bootstrap_telemetry::opentelemetry_sdk::metrics::SdkMeterProvider;
 use scuffle_bootstrap_telemetry::opentelemetry_sdk::Resource;
 use scuffle_bootstrap_telemetry::prometheus_client::registry::Registry;
+use scuffle_brawl::github::GitHubService;
+use scuffle_brawl::schema::health_check;
 use scuffle_metrics::opentelemetry::KeyValue;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -30,12 +34,11 @@ pub struct Config {
 #[derive(Debug, smart_default::SmartDefault, serde::Deserialize)]
 #[serde(default)]
 pub struct GitHub {
-	#[default(env_or_default("GITHUB_ACCESS_TOKEN", None))]
-	pub access_token: Option<String>,
-	#[default(env_or_default("GITHUB_APP_CLIENT_ID", None))]
-	pub app_client_id: Option<String>,
-	#[default(env_or_default("GITHUB_APP_CLIENT_SECRET", None))]
-	pub app_client_secret: Option<String>,
+	#[default(SocketAddr::from(([0, 0, 0, 0], 3000)))]
+	pub webhook_bind: SocketAddr,
+	pub app_id: u64,
+	pub private_key_pem: String,
+	pub webhook_secret: String,
 }
 
 fn env_or_default<T: From<String>>(key: &'static str, default: impl Into<T>) -> T {
@@ -47,7 +50,8 @@ scuffle_settings::bootstrap!(Config);
 pub struct Global {
 	config: Config,
 	metrics_registry: Registry,
-	database: sea_orm::DatabaseConnection,
+	database: diesel_async::pooled_connection::bb8::Pool<diesel_async::AsyncPgConnection>,
+	github_service: GitHubService,
 }
 
 impl scuffle_bootstrap::Global for Global {
@@ -83,12 +87,36 @@ impl scuffle_bootstrap::Global for Global {
 			anyhow::bail!("DATABASE_URL is not set");
 		};
 
-		let database = sea_orm::Database::connect(db_url).await.context("connect to database")?;
+		let database = diesel_async::pooled_connection::bb8::Pool::builder()
+			.build(diesel_async::pooled_connection::AsyncDieselConnectionManager::new(db_url))
+			.await
+			.context("build database pool")?;
+
+		tracing::info!("database initialized.");
+
+		let github_service = GitHubService::new(
+			config.github.app_id.into(),
+			jsonwebtoken::EncodingKey::from_rsa_pem(config.github.private_key_pem.as_bytes())?,
+		)
+		.await?;
+
+		let installations = github_service.installations();
+		let repo_count = installations
+			.values()
+			.map(|installation| installation.repositories().len())
+			.sum::<usize>();
+
+		tracing::info!(
+			"github service initialized tracking {} installations with {} repositories",
+			installations.len(),
+			repo_count
+		);
 
 		Ok(Arc::new(Self {
 			config,
 			metrics_registry,
 			database,
+			github_service,
 		}))
 	}
 }
@@ -102,7 +130,17 @@ impl scuffle_signal::SignalConfig for Global {
 
 impl scuffle_bootstrap_telemetry::TelemetryConfig for Global {
 	async fn health_check(&self) -> Result<(), anyhow::Error> {
-		self.database.ping().await.context("ping database")?;
+		let mut conn = self.database.get().await.context("get database connection")?;
+
+		// Health check to see if the database is healthy and can be reached.
+		// We do an update here because we want to make sure the database is
+		// not just readable but also writable.
+		diesel::update(health_check::dsl::health_check.find(1))
+			.set(health_check::dsl::updated_at.eq(chrono::Utc::now()))
+			.execute(&mut conn)
+			.await
+			.context("update health check")?;
+
 		Ok(())
 	}
 
@@ -115,9 +153,24 @@ impl scuffle_bootstrap_telemetry::TelemetryConfig for Global {
 	}
 }
 
+impl scuffle_brawl::github::WebhookConfig for Global {
+	fn bind_address(&self) -> Option<SocketAddr> {
+		Some(self.config.github.webhook_bind)
+	}
+
+	fn webhook_secret(&self) -> &str {
+		&self.config.github.webhook_secret
+	}
+
+	fn github_service(&self) -> &GitHubService {
+		&self.github_service
+	}
+}
+
 scuffle_bootstrap::main! {
 	Global {
 		scuffle_signal::SignalSvc,
 		scuffle_bootstrap_telemetry::TelemetrySvc,
+		scuffle_brawl::github::WebhookSvc,
 	}
 }

@@ -12,30 +12,17 @@ test *args:
     set -euo pipefail
 
     # We use the nightly toolchain for coverage since it supports branch & no-coverage flags.
-    export RUSTUP_TOOLCHAIN=nightly
 
-    INSTA_FORCE_PASS=1 cargo llvm-cov clean --workspace
-    INSTA_FORCE_PASS=1 cargo llvm-cov nextest --branch --include-build-script --no-report {{args}}
+    INSTA_FORCE_PASS=1 cargo +nightly llvm-cov clean --workspace
+    INSTA_FORCE_PASS=1 cargo +nightly llvm-cov nextest --no-report {{args}}
 
     # Do not generate the coverage report on CI
-    cargo insta review
-    cargo llvm-cov report --html
-    cargo llvm-cov report --lcov --output-path ./lcov.info
+    cargo +nightly insta review
+    cargo +nightly llvm-cov report --html
+    cargo +nightly llvm-cov report --lcov --output-path ./lcov.info
 
 deny *args:
     cargo deny {{args}} --all-features check
-
-generate:
-    RUSTUP_TOOLCHAIN=nightly sea-orm-cli generate entity -o server/src/entities
-
-migrate-sqlite *args:
-    sea-orm-cli migrate {{args}} --database-url sqlite:./brawl.db
-
-migrate-postgres *args:
-    sea-orm-cli migrate {{args}} --database-url postgres://brawl:brawl@localhost:5432/brawl
-
-generate-entities *args:
-    RUSTUP_TOOLCHAIN=nightly sea-orm-cli generate entity -o server/src/entities {{args}}
 
 workspace-hack:
     cargo hakari manage-deps
