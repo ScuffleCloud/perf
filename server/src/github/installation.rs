@@ -8,7 +8,7 @@ use moka::future::Cache;
 use octocrab::models::commits::{Commit, GitCommitObject};
 use octocrab::models::issues::Issue;
 use octocrab::models::pulls::PullRequest;
-use octocrab::models::repos::{CommitAuthor, Object, Ref, RepoCommit};
+use octocrab::models::repos::{Object, Ref, RepoCommit};
 use octocrab::models::{Installation, InstallationRepositories, Repository, RepositoryId, UserId, UserProfile};
 use octocrab::params::repos::Reference;
 use octocrab::{params, GitHubError, Octocrab};

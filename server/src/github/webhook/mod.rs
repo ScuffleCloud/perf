@@ -6,8 +6,6 @@ use anyhow::Context;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::{Json, RequestExt};
-use command::pr::PullRequestCommand;
-use command::{BrawlCommand, BrawlCommandContext};
 use diesel_async::pooled_connection::bb8;
 use diesel_async::AsyncPgConnection;
 use hmac::{Hmac, Mac};
@@ -21,7 +19,8 @@ use scuffle_http::backend::HttpServer;
 use serde::Serialize;
 use sha2::Sha256;
 
-mod command;
+use crate::command::pr::PullRequestCommand;
+use crate::command::{BrawlCommand, BrawlCommandContext};
 
 use super::GitHubService;
 
@@ -96,8 +95,6 @@ async fn handle_webhook<C: WebhookConfig>(
 			}),
 		);
 	}
-
-	// F
 
 	let event = match parse_event(header, &body) {
 		Ok(event) => event,
@@ -333,7 +330,7 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
 				return Ok(());
 			};
 
-			let Ok(command) = command::BrawlCommand::from_str(&pr_review_comment_event.comment.body) else {
+			let Ok(command) = BrawlCommand::from_str(&pr_review_comment_event.comment.body) else {
 				return Ok(());
 			};
 
@@ -370,7 +367,7 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
 				return Ok(());
 			};
 
-			let Ok(command) = command::BrawlCommand::from_str(body) else {
+			let Ok(command) = BrawlCommand::from_str(body) else {
 				return Ok(());
 			};
 

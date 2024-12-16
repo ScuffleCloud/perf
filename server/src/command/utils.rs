@@ -12,7 +12,7 @@ use crate::schema_enums::{GithubPrMergeStatus, GithubPrStatus};
 
 #[derive(Insertable, Selectable, Queryable)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
-#[diesel(table_name = crate::schema::github_pr_merge_queue)]
+#[diesel(table_name = crate::schema::github_pr)]
 #[diesel(primary_key(github_repo_id, github_pr_number))]
 pub struct PrMergeQueue<'a> {
 	pub github_repo_id: i64,
@@ -85,7 +85,7 @@ impl<'a> PrMergeQueue<'a> {
 		pr: &'a PullRequest,
 		conn: &mut AsyncPgConnection,
 	) -> anyhow::Result<Self> {
-		let current: Option<PrMergeQueue<'static>> = crate::schema::github_pr_merge_queue::table
+		let current: Option<PrMergeQueue<'static>> = crate::schema::github_pr::table
 			.find((repo_id.0 as i64, pr.number as i32))
 			.select(PrMergeQueue::as_select())
 			.first(conn)
@@ -97,7 +97,7 @@ impl<'a> PrMergeQueue<'a> {
 			current
 		} else {
 			let insert = PrMergeQueue::new(pr, repo_id, user_id);
-			diesel::insert_into(crate::schema::github_pr_merge_queue::dsl::github_pr_merge_queue)
+			diesel::insert_into(crate::schema::github_pr::dsl::github_pr)
 				.values(&insert)
 				.execute(conn)
 				.await
@@ -111,7 +111,7 @@ impl<'a> PrMergeQueue<'a> {
 }
 
 #[derive(AsChangeset)]
-#[diesel(table_name = crate::schema::github_pr_merge_queue)]
+#[diesel(table_name = crate::schema::github_pr)]
 #[diesel(primary_key(github_repo_id, github_pr_number))]
 pub struct UpdatePrMergeQueue<'a> {
 	#[allow(unused)]
@@ -214,21 +214,13 @@ impl<'a> UpdatePrMergeQueue<'a> {
 			return Ok(());
 		}
 
-		diesel::update(crate::schema::github_pr_merge_queue::dsl::github_pr_merge_queue)
+		diesel::update(crate::schema::github_pr::dsl::github_pr)
 			.set(&self)
 			.execute(conn)
 			.await
 			.context("update")?;
 
 		Ok(())
-	}
-}
-
-pub fn short_commit(sha: &str) -> &str {
-	if sha.len() > 7 {
-		&sha[..7]
-	} else {
-		sha
 	}
 }
 

@@ -1,4 +1,4 @@
-DROP TABLE github_pr_merge_queue;
+DROP TABLE github_pr;
 DROP TYPE github_pr_merge_status;
 DROP TYPE github_pr_status;
 

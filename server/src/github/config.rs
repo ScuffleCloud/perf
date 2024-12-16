@@ -19,6 +19,9 @@ pub struct GitHubBrawlQueueConfig {
 	/// If the queue is enabled (default: true)
 	#[default(true)]
 	pub enabled: bool,
+	/// The global concurrency for all CI runs (default: unlimited)
+	#[default(None)]
+	pub global_concurrency: Option<u32>,
 	/// Labels to attach to PRs on different states
 	pub labels: GitHubBrawlLabelsConfig,
 	/// The branches that can be merged into

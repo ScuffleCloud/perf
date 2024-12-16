@@ -13,18 +13,24 @@ CREATE TABLE github_ci_runs (
     -- and issues don't.
     github_issue_number INT NOT NULL,
     status github_ci_run_status NOT NULL,
-    -- The SHA of the base commit (the commit we are merging into)
-    base_commit_sha TEXT NOT NULL,
+    -- The base of the run:
+    -- Must start with either `branch:` or `commit:` followed by the branch name or commit SHA
+    base_ref TEXT NOT NULL,
     -- The SHA of the head commit (the commit we are merging from)
     head_commit_sha TEXT NOT NULL,
+    -- The SHA of the commit that was run (if the run was successful), null if the run has not started yet.
+    run_commit_sha TEXT,
     -- A concurrency group only allows one CI run to be active at a time.
     ci_branch TEXT NOT NULL,
     -- The priority of the CI run (higher priority runs are run first)
     priority INT NOT NULL,
     -- The ID of the user who requested the CI run (on GitHub)
     requested_by_id BIGINT NOT NULL,
+    -- The time the CI run was completed
     completed_at TIMESTAMPTZ,
+    -- The time the CI run was created
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- The time the CI run was last updated
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -54,7 +60,7 @@ CREATE TYPE github_pr_merge_status AS ENUM (
     'merged'
 );
 
-CREATE TABLE github_pr_merge_queue (
+CREATE TABLE github_pr (
     github_repo_id BIGINT NOT NULL,
     github_pr_number INT NOT NULL,
 
