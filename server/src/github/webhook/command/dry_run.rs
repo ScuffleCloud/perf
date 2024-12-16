@@ -3,6 +3,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use diesel_async::AsyncPgConnection;
 use octocrab::models::pulls::PullRequest;
+use octocrab::models::repos::Object;
+use octocrab::params::repos::Reference;
 
 use super::utils::commit_link;
 use super::BrawlCommandContext;
@@ -98,23 +100,57 @@ pub async fn handle(
 	};
 
 	let head = repo_client.get_commit(head_sha).await.context("get head commit")?;
+	let base = if let Some(base_sha) = &command.base_sha {
+		Some(repo_client.get_commit(base_sha).await.context("get base commit")?)
+	} else if let Some(pr) = &context.pr {
+		let Some(gh_ref) = repo_client.get_ref(&Reference::Branch(pr.base.ref_field.clone())).await? else {
+			anyhow::bail!("head ref not found");
+		};
 
-	let commit = if let Some(base_sha) = command.base_sha {
+		let base_sha = match gh_ref.object {
+			Object::Commit { sha, .. } => sha,
+			Object::Tag { sha, .. } => sha,
+			r => anyhow::bail!("head ref object is not a commit or tag: {:?}", r),
+		};
+
+		Some(repo_client.get_commit(&base_sha).await.context("get base commit")?)
+	} else {
+		None
+	};
+
+	let commit_sha = if let Some(base) = base {
+		let mut base_link = commit_link(&repo_owner.login, &repo.name, &base.sha);
+		let mut head_link = head_link.clone();
+		if let Some(pr) = &context.pr {
+			base_link = format!("{base_link} ({})", pr.base.label.as_ref().map(|l| l.as_str()).unwrap_or(&pr.base.ref_field));
+			head_link = format!("{head_link} ({})", pr.head.label.as_ref().map(|l| l.as_str()).unwrap_or(&pr.head.ref_field));
+		}
+
+		let mut items = vec![];
+
+		if let Some(pr) = &context.pr {
+			items.push(format!("{}", pr.head.label.as_ref().map(|l| l.as_str()).unwrap_or(&pr.head.ref_field)));
+		}
+
+		items.push(format!("r={user}", user = context.user.login.to_lowercase()));
+
 		repo_client
-			.create_commit(
-				format!(
-					"Dry run from #{issue} - r={user}\n\nTrying commit: {head_link} into {base_link}",
+			.create_merge(
+				&format!(
+					"Dry run from #{issue} - {items}\n\nTrying commit: {head_link} into {base_link}",
 					issue = context.issue_number,
-					user = context.user.login.to_lowercase(),
+					items = items.join(", "),
 					head_link = head_link,
-					base_link = commit_link(&repo_owner.login, &repo.name, &base_sha),
+					base_link = base_link,
 				),
-				vec![head_sha.to_owned(), base_sha.to_owned()],
-				head.commit.tree.sha,
+				&context.config.queue.temp_branch_prefix,
+				&base.sha,
+				&head_sha,
 			)
 			.await
-			.context("create commit")?
-	} else if command.head_sha.is_some() {
+			.context("create merge")?
+			.sha
+	} else {
 		repo_client
 			.create_commit(
 				format!(
@@ -128,24 +164,7 @@ pub async fn handle(
 			)
 			.await
 			.context("create commit")?
-	} else if let Some(pr) = &context.pr {
-		repo_client
-			.create_commit(
-				format!(
-					"Dry run from #{issue} - {head}, r={user}\n\nTrying commit: {head_link} into {base_link}",
-					issue = context.issue_number,
-					head = pr.head.ref_field,
-					user = context.user.login.to_lowercase(),
-					head_link = head_link,
-					base_link = commit_link(&repo_owner.login, &repo.name, &pr.base.sha),
-				),
-				vec![head_sha.to_owned(), pr.base.sha.clone()],
-				head.commit.tree.sha,
-			)
-			.await
-			.context("create commit")?
-	} else {
-		anyhow::bail!("no commit sha provided");
+			.sha
 	};
 
 	let prefix = context.config.queue.try_branch_prefix.trim_end_matches('/');
@@ -157,7 +176,7 @@ pub async fn handle(
 
 	let branch = format!("{}/{}", prefix, context.issue_number);
 
-	if let Err(err) = repo_client.push_branch(&branch, &commit.sha, true).await {
+	if let Err(err) = repo_client.push_branch(&branch, &commit_sha, true).await {
 		tracing::error!("push branch failed: {:#}", err);
 		repo_client
 			.send_message(
@@ -174,7 +193,7 @@ pub async fn handle(
 			format!(
 				"⌛ Testing commit {} with merge {}...",
 				commit_link(&repo_owner.login, &repo.name, head_sha),
-				commit_link(&repo_owner.login, &repo.name, &commit.sha),
+				commit_link(&repo_owner.login, &repo.name, &commit_sha),
 			),
 		)
 		.await?;

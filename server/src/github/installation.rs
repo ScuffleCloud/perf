@@ -11,7 +11,7 @@ use octocrab::models::pulls::PullRequest;
 use octocrab::models::repos::{CommitAuthor, Object, Ref, RepoCommit};
 use octocrab::models::{Installation, InstallationRepositories, Repository, RepositoryId, UserId, UserProfile};
 use octocrab::params::repos::Reference;
-use octocrab::{GitHubError, Octocrab};
+use octocrab::{params, GitHubError, Octocrab};
 use parking_lot::Mutex;
 
 use super::config::{GitHubBrawlRepoConfig, Permission, Role};
@@ -379,6 +379,39 @@ impl<'a> RepoClient<'a> {
 			.context("get commit")
 	}
 
+	pub async fn create_merge(
+		&self,
+		message: &str,
+		tmp_branch_prefix: &str,
+		base_sha: &str,
+		head_sha: &str,
+	) -> anyhow::Result<Commit> {
+		let repo = self.get()?;
+
+		let tmp_branch = format!("{}/{}", tmp_branch_prefix.trim_end_matches('/'), uuid::Uuid::new_v4());
+
+		self.push_branch(&tmp_branch, base_sha, true).await.context("push tmp branch")?;
+
+		let commit = self.installation
+			.client()
+			.post::<_, Commit>(
+				format!("/repos/{}/{}/merges", repo.owner.unwrap().login, repo.name),
+				Some(&serde_json::json!({
+					"base": tmp_branch,
+					"head": head_sha,
+					"commit_message": message,
+				})),
+			)
+			.await
+			.context("create commit");
+
+		if let Err(e) = self.delete_branch(&tmp_branch).await {
+			tracing::error!("failed to delete tmp branch: {:#}", e);
+		}
+
+		commit
+	}
+
 	pub async fn create_commit(
 		&self,
 		message: String,
@@ -445,6 +478,15 @@ impl<'a> RepoClient<'a> {
 		Ok(())
 	}
 
+	pub async fn delete_branch(&self, branch: &str) -> anyhow::Result<()> {
+		self.installation
+			.client()
+			.repos_by_id(self.repo_id)
+			.delete_ref(&Reference::Branch(branch.to_owned()))
+			.await
+			.context("delete branch")
+	}
+
 	pub async fn get_commit_by_sha(&self, sha: &str) -> anyhow::Result<Option<Commit>> {
 		let repo = self.get()?;
 
@@ -466,6 +508,20 @@ impl<'a> RepoClient<'a> {
 				..
 			}) => Ok(None),
 			Err(e) => Err(e).context("get commit by sha"),
+		}
+	}
+
+	pub async fn get_ref(&self, gh_ref: &params::repos::Reference) -> anyhow::Result<Option<Ref>> {
+		match self.installation.client().repos_by_id(self.repo_id).get_ref(gh_ref).await {
+			Ok(r) => Ok(Some(r)),
+			Err(octocrab::Error::GitHub {
+				source: GitHubError {
+					status_code: http::StatusCode::NOT_FOUND,
+					..
+				},
+				..
+			}) => Ok(None),
+			Err(e) => Err(e).context("get ref"),
 		}
 	}
 }

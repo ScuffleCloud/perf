@@ -18,6 +18,12 @@ try_branch_prefix = "automation/brawl/try/"
 # Like: `automation/brawl/merge/main`
 merge_branch_prefix = "automation/brawl/merge/"
 
+# The branch prefix for temporary branches created when performing merges
+# Will append the target branch name to the end of the prefix:
+# `automation/brawl/temp/<uuid>`
+# Like: `automation/brawl/temp/79570502-0e92-4c6c-87fe-636b2490c77d`
+temp_branch_prefix = "automation/brawl/temp/"
+
 # By default only users with `write` access can merge PRs
 merge_permissions = [
     "role:write", # include anyone with write access

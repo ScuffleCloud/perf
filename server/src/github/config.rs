@@ -31,6 +31,10 @@ pub struct GitHubBrawlQueueConfig {
 	/// "automation/brawl/merge/")
 	#[default("automation/brawl/merge/")]
 	pub merge_branch_prefix: String,
+	/// The branch prefix for temp branches used when performing merges (default:
+	/// "automation/brawl/temp/")
+	#[default("automation/brawl/temp/")]
+	pub temp_branch_prefix: String,
 	/// The permissions required to merge a PR (default: ["role:write"])
 	#[default(vec![Permission::Role(Role::Push)])]
 	pub merge_permissions: Vec<Permission>,
