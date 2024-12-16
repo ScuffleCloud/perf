@@ -33,7 +33,7 @@ merge_permissions = [
 # ]
 
 [queue.labels]
-on_merge_queued = "waiting-for-brawl-merge"
+on_merge_queued = "waiting-for-brawl-merg2e"
 on_merge_in_progress = "running-brawl-merge"
 on_merge_failure = "brawl-merge-failed"
 on_merge_success = "merged-by-brawl"
