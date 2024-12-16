@@ -7,7 +7,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use diesel::query_dsl::methods::FindDsl;
 use diesel::ExpressionMethods;
-use diesel_async::RunQueryDsl;
+use diesel_async::pooled_connection::bb8::{self};
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use scuffle_bootstrap_telemetry::opentelemetry;
 use scuffle_bootstrap_telemetry::opentelemetry_sdk::metrics::SdkMeterProvider;
 use scuffle_bootstrap_telemetry::opentelemetry_sdk::Resource;
@@ -50,8 +51,9 @@ scuffle_settings::bootstrap!(Config);
 pub struct Global {
 	config: Config,
 	metrics_registry: Registry,
-	database: diesel_async::pooled_connection::bb8::Pool<diesel_async::AsyncPgConnection>,
+	database: bb8::Pool<AsyncPgConnection>,
 	github_service: GitHubService,
+	start_time: std::time::Instant,
 }
 
 impl scuffle_bootstrap::Global for Global {
@@ -96,9 +98,11 @@ impl scuffle_bootstrap::Global for Global {
 
 		let github_service = GitHubService::new(
 			config.github.app_id.into(),
-			jsonwebtoken::EncodingKey::from_rsa_pem(config.github.private_key_pem.as_bytes())?,
+			jsonwebtoken::EncodingKey::from_rsa_pem(config.github.private_key_pem.as_bytes())
+				.context("decode private key")?,
 		)
-		.await?;
+		.await
+		.context("initialize github service")?;
 
 		let installations = github_service.installations();
 		let repo_count = installations
@@ -117,6 +121,7 @@ impl scuffle_bootstrap::Global for Global {
 			metrics_registry,
 			database,
 			github_service,
+			start_time: std::time::Instant::now(),
 		}))
 	}
 }
@@ -164,6 +169,14 @@ impl scuffle_brawl::github::WebhookConfig for Global {
 
 	fn github_service(&self) -> &GitHubService {
 		&self.github_service
+	}
+
+	fn database_pool(&self) -> &bb8::Pool<AsyncPgConnection> {
+		&self.database
+	}
+
+	fn uptime(&self) -> std::time::Duration {
+		std::time::Instant::now() - self.start_time
 	}
 }
 

@@ -6,6 +6,7 @@ use installation::InstallationClient;
 use octocrab::models::{AppId, Installation, InstallationId, UserId};
 use octocrab::Octocrab;
 
+pub mod config;
 pub mod installation;
 pub mod webhook;
 

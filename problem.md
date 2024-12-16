@@ -2,6 +2,12 @@ make github bot that handles merge requests + can rollup PRs.
 
 ## Wants
 
+Special branches:
+
+- `brawl/merge/<branch_name>`
+
+- `brawl/try/<pr_number>`
+
 ### 2 stage CI pipeline
 
 We want to have a 2 stage CI pipeline.
@@ -28,17 +34,16 @@ We want to be able to rollup multiple PRs into a single workflow run.
 
 `@brawl r+`
 
-`@brawl r+ rollup=<state> p=<priority> r=<username>`
+`@brawl r+ p=<priority> r=<username>`
 
     - Denotes you approve this PR & queues it for merge.
-    - `rollup=<state>` can be:
-        - "deny" - this PR should never be rolled up
-        - "allow" - this PR should always be rolled up (if you don't provide a state this is the default)
     - `p=<priority>` is an integer denoting the priority of this PR (higher is more important)
-    - `r=<username>` is the username of the person who is approving this PR (they must have previously approved this PR via `@brawl r+`)
+    - `r=<username>` is the username of the person who is approving this PR (they must have previously approved this PR via `@brawl merge`)
     - queues this PR for merge (commits after the approval will not be tested, and therefore will not be merged)
 
-`@brawl r-` 
+`@brawl r-`
+
+`@brawl r- p=<priority> r=<username>`
 
     - stops whatever is running or queued for this PR
     - remove the label from this PR
@@ -49,6 +54,11 @@ We want to be able to rollup multiple PRs into a single workflow run.
 
     - adds a label saying this PR is being tested (if you provide a commit sha, we will trigger the run on that specific commit, otherwise the PR will be tested on the latest commit pushed @ the time of the command)
     - runs the 2nd stage CI for this PR (will report the results to the PR)
+
+`@brawl cancel`
+
+    - cancels whatever is running or queued for this PR
+    - implies `@brawl r-`
 
 ## Rolling up PRs
 

@@ -3,7 +3,9 @@
 
 [print_schema]
 file = "server/src/schema.rs"
+with_docs = true
 custom_type_derives = ["diesel::query_builder::QueryId", "Clone"]
+patch_file = "./migrations/schema.patch"
 
 [migrations_directory]
-dir = "/home/troy/github/scuffle/perf/migrations"
+dir = "./migrations"
