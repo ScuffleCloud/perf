@@ -10,7 +10,7 @@ on:
       - 'deny.toml'
     branches:
       - '*'
-      - '!automation/**'
+      - '!automation/brawl/temp/*'
   schedule:
     - cron: '0 0 * * *'
 
