@@ -361,6 +361,9 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
 				)
 				.await?;
 		}
+		WebhookEventPayload::CheckSuite(check_suite_event) => {
+			dbg!(&check_suite_event);
+		}
 		WebhookEventPayload::CheckRun(check_run_event) => {
 			dbg!(&check_run_event);
 		}
