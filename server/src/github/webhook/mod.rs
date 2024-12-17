@@ -293,6 +293,12 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
 				return Ok(());
 			};
 
+			let Some(repo_client) = client.get_repository(repo_id) else {
+				return Ok(());
+			};
+
+			repo_client.set_pull_request(pull_request_event.pull_request.clone()).await;
+
 			let config = client.get_repo_config(repo_id).await?;
 
 			let Some(author) = event

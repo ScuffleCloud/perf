@@ -4,12 +4,14 @@ on:
   push:
     branches:
       - main
+      - automation/brawl/try/*
+      - automation/brawl/merge/*
 
   pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
