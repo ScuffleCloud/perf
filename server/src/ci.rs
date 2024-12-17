@@ -25,9 +25,7 @@ pub struct Head<'a> {
 
 impl<'a> Head<'a> {
 	pub fn from_sha(sha: &'a str) -> Self {
-		Self {
-			sha: Cow::Borrowed(&sha),
-		}
+		Self { sha: Cow::Borrowed(sha) }
 	}
 
 	pub fn from_pr(pr: &'a PullRequest) -> Self {
@@ -53,7 +51,7 @@ impl<'a> Base<'a> {
 	}
 
 	pub const fn from_sha(sha: &'a str) -> Self {
-		Self::Commit(Cow::Borrowed(&sha))
+		Self::Commit(Cow::Borrowed(sha))
 	}
 
 	pub fn from_string(s: &'a str) -> Option<Self> {
@@ -69,7 +67,7 @@ impl<'a> Base<'a> {
 	}
 }
 
-impl<'a> std::fmt::Display for Base<'a> {
+impl std::fmt::Display for Base<'_> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			Base::Commit(sha) => write!(f, "commit:{sha}"),
@@ -80,57 +78,50 @@ impl<'a> std::fmt::Display for Base<'a> {
 
 #[derive(Insertable)]
 #[diesel(table_name = crate::schema::github_ci_runs)]
-struct InsertCiRun<'a> {
-	github_repo_id: i64,
-	github_pr_number: i32,
-	status: GithubCiRunStatus,
-	base_ref: String,
-	head_commit_sha: Cow<'a, str>,
-	run_commit_sha: Option<Cow<'a, str>>,
-	ci_branch: Cow<'a, str>,
-	priority: i32,
-	requested_by_id: i64,
-	is_dry_run: bool,
-	completed_at: Option<chrono::DateTime<chrono::Utc>>,
-	created_at: chrono::DateTime<chrono::Utc>,
-	updated_at: chrono::DateTime<chrono::Utc>,
+pub struct InsertCiRun<'a> {
+	pub github_repo_id: i64,
+	pub github_pr_number: i32,
+	pub base_ref: &'a str,
+	pub head_commit_sha: &'a str,
+	pub run_commit_sha: Option<&'a str>,
+	pub ci_branch: &'a str,
+	pub priority: i32,
+	pub requested_by_id: i64,
+	pub is_dry_run: bool,
+	pub approved_by_ids: Vec<i64>,
 }
 
-pub async fn create_ci_run(
-	conn: &mut AsyncPgConnection,
-	repo_id: RepositoryId,
-	issue_number: i64,
-	ci_branch: &str,
-	priority: i32,
-	requested_by_id: UserId,
-	base: &Base<'_>,
-	head: &Head<'_>,
-	is_dry_run: bool,
-) -> anyhow::Result<i32> {
-	let ci_run = InsertCiRun {
-		github_repo_id: repo_id.0 as i64,
-		github_pr_number: issue_number as i32,
-		status: GithubCiRunStatus::Queued,
-		base_ref: base.to_string(),
-		head_commit_sha: Cow::Borrowed(head.sha()),
-		run_commit_sha: None,
-		ci_branch: Cow::Borrowed(ci_branch),
-		priority,
-		requested_by_id: requested_by_id.0 as i64,
-		is_dry_run,
-		completed_at: None,
-		created_at: chrono::Utc::now(),
-		updated_at: chrono::Utc::now(),
-	};
+impl<'a> InsertCiRun<'a> {
+	pub async fn insert(self, conn: &mut AsyncPgConnection, client: &Arc<InstallationClient>, config: &GitHubBrawlRepoConfig, reviewers: &[String]) -> anyhow::Result<i32> {
+		let run_id = diesel::insert_into(crate::schema::github_ci_runs::dsl::github_ci_runs)
+			.values(&self)
+			.returning(crate::schema::github_ci_runs::id)
+			.get_result(conn)
+			.await
+			.context("insert")?;
 
-	let run_id = diesel::insert_into(crate::schema::github_ci_runs::dsl::github_ci_runs)
-		.values(&ci_run)
-		.returning(crate::schema::github_ci_runs::id)
-		.get_result(conn)
-		.await
-		.context("insert")?;
+		if self.is_dry_run {
+			start_ci_run(conn, run_id, client, config).await?;
+		} else {
+			let repo_client = client.get_repository(RepositoryId(self.github_repo_id as u64)).context("get repository")?;
 
-	Ok(run_id)
+			let repo = repo_client.get()?;
+			let repo_owner = repo.owner.context("repo owner")?;
+
+			repo_client
+				.send_message(
+					self.github_pr_number as u64,
+					&format!(
+						"📌 Commit {} has been approved by `{reviewers}`, added to the merge queue.",
+						commit_link(&repo_owner.login, &repo.name, &self.head_commit_sha),
+						reviewers = reviewers.join(", ")
+					),
+				)
+				.await?;
+		}
+
+		Ok(run_id)
+	}
 }
 
 #[derive(Queryable, Selectable)]
@@ -151,6 +142,43 @@ pub struct CiRun {
 	pub started_at: Option<chrono::DateTime<chrono::Utc>>,
 	pub created_at: chrono::DateTime<chrono::Utc>,
 	pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl CiRun {
+	pub async fn start(&self, conn: &mut AsyncPgConnection, client: &Arc<InstallationClient>, config: &GitHubBrawlRepoConfig) -> anyhow::Result<bool> {
+		start_ci_run(conn, self.id, client, config).await
+	}
+
+	pub async fn cancel(&self, conn: &mut AsyncPgConnection, client: &Arc<InstallationClient>) -> anyhow::Result<()> {
+		cancel_ci_run(conn, self.id, client).await
+	}
+
+	pub async fn get_active(conn: &mut AsyncPgConnection, repo_id: RepositoryId, pr_number: i64) -> anyhow::Result<Option<Self>> {
+		crate::schema::github_ci_runs::dsl::github_ci_runs
+			.select(CiRun::as_select())
+			.filter(
+				crate::schema::github_ci_runs::github_repo_id
+					.eq(repo_id.0 as i64)
+					.and(crate::schema::github_ci_runs::github_pr_number.eq(pr_number as i32))
+					.and(crate::schema::github_ci_runs::completed_at.is_null()),
+			)
+			.get_result::<CiRun>(conn)
+			.await
+			.optional()
+			.context("select")
+	}
+
+	pub async fn get_latest(conn: &mut AsyncPgConnection, repo_id: RepositoryId, pr_number: i64) -> anyhow::Result<Option<Self>> {
+		crate::schema::github_ci_runs::dsl::github_ci_runs
+			.select(CiRun::as_select())
+			.filter(crate::schema::github_ci_runs::github_repo_id.eq(repo_id.0 as i64).and(crate::schema::github_ci_runs::github_pr_number.eq(pr_number as i32)))
+			.order(crate::schema::github_ci_runs::created_at.desc())
+			.limit(1)
+			.get_result::<CiRun>(conn)
+			.await
+			.optional()
+			.context("select")
+	}
 }
 
 pub async fn start_ci_run(
@@ -226,7 +254,13 @@ pub async fn start_ci_run(
 		None => anyhow::bail!("invalid base"),
 	};
 
-	let Some(pr) = Pr::fetch(conn, RepositoryId(ci_run.github_repo_id as u64), ci_run.github_pr_number as i64).await? else {
+	let Some(pr) = Pr::fetch(
+		conn,
+		RepositoryId(ci_run.github_repo_id as u64),
+		ci_run.github_pr_number as i64,
+	)
+	.await?
+	else {
 		anyhow::bail!("pr not found");
 	};
 
@@ -257,12 +291,19 @@ pub async fn start_ci_run(
 			&base_sha,
 			&ci_run.head_commit_sha,
 		)
-		.await {
-			Ok(commit) => commit,
-			Err(e) => {
-				if let Some(err) = e.downcast_ref::<octocrab::Error>() {
-					if let octocrab::Error::GitHub { source: GitHubError { status_code: http::StatusCode::CONFLICT, .. }, .. } = err {
-						repo_client
+		.await
+	{
+		Ok(commit) => commit,
+		Err(e) => {
+			if let Some(octocrab::Error::GitHub {
+				source: GitHubError {
+					status_code: http::StatusCode::CONFLICT,
+					..
+				},
+				..
+			}) = e.downcast_ref::<octocrab::Error>()
+			{
+				repo_client
 							.send_message(
 								ci_run.github_pr_number as u64,
 								format!(r#"🔒 Merge conflict
@@ -299,28 +340,30 @@ handled during merge and rebase. This is normal, and you should still perform st
 							.await
 							.context("send message")?;
 
-						return Ok(false);
-					}
-				}
+				return Ok(false);
+			}
 
-				repo_client
-					.send_message(
-						ci_run.github_pr_number as u64,
-						format!(r#"🚨 Failed to start CI run
+			repo_client
+				.send_message(
+					ci_run.github_pr_number as u64,
+					format!(
+						r#"🚨 Failed to start CI run
 <details>
 <summary>Error</summary>
 
 {error:#}
 
 </details>
-"#, error = e),
-					)
-					.await
-					.context("send message")?;
+"#,
+						error = e
+					),
+				)
+				.await
+				.context("send message")?;
 
-				return Ok(false);
-			}
-		};
+			return Ok(false);
+		}
+	};
 
 	repo_client
 		.push_branch(&ci_run.ci_branch, &commit.sha, true)
@@ -348,43 +391,6 @@ handled during merge and rebase. This is normal, and you should still perform st
 	Ok(true)
 }
 
-pub async fn get_active_ci_run(
-	conn: &mut AsyncPgConnection,
-	repo_id: RepositoryId,
-	pr_number: i64,
-) -> anyhow::Result<Option<CiRun>> {
-	crate::schema::github_ci_runs::dsl::github_ci_runs
-		.select(CiRun::as_select())
-		.filter(
-			crate::schema::github_ci_runs::github_repo_id.eq(repo_id.0 as i64)
-				.and(crate::schema::github_ci_runs::github_pr_number.eq(pr_number as i32))
-				.and(crate::schema::github_ci_runs::completed_at.is_null()),
-		)
-		.get_result::<CiRun>(conn)
-		.await
-		.optional()
-		.context("select")
-}
-
-pub async fn get_latest_ci_run(
-	conn: &mut AsyncPgConnection,
-	repo_id: RepositoryId,
-	pr_number: i64,
-) -> anyhow::Result<Option<CiRun>> {
-	crate::schema::github_ci_runs::dsl::github_ci_runs
-		.select(CiRun::as_select())
-		.filter(
-			crate::schema::github_ci_runs::github_repo_id.eq(repo_id.0 as i64)
-				.and(crate::schema::github_ci_runs::github_pr_number.eq(pr_number as i32))
-		)
-		.order(crate::schema::github_ci_runs::created_at.desc())
-		.limit(1)
-		.get_result::<CiRun>(conn)
-		.await
-		.optional()
-		.context("select")
-}
-
 pub async fn cancel_ci_run(
 	conn: &mut AsyncPgConnection,
 	run_id: i32,
@@ -392,7 +398,8 @@ pub async fn cancel_ci_run(
 ) -> anyhow::Result<()> {
 	let response = diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
 		.filter(
-			crate::schema::github_ci_runs::id.eq(run_id)
+			crate::schema::github_ci_runs::id
+				.eq(run_id)
 				.and(crate::schema::github_ci_runs::completed_at.is_null()),
 		)
 		.set((
@@ -416,4 +423,3 @@ pub async fn cancel_ci_run(
 
 	Ok(())
 }
-

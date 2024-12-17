@@ -1,5 +1,7 @@
 mod? local
 
+set shell := ["/bin/bash", "-euo", "pipefail", "-uc"]
+
 # An alias for cargo +nightly fmt --all
 fmt *args:
     cargo +nightly fmt --all {{args}}
@@ -27,3 +29,41 @@ deny *args:
 workspace-hack:
     cargo hakari manage-deps
     cargo hakari generate
+
+diesel-generate: _diesel-generate-unpatched
+	# Generate the schema file
+	touch migrations/schema.patch
+	cp migrations/schema.unpatched.rs server/src/schema.rs
+	just diesel-apply
+
+diesel-patch: _diesel-generate-unpatched
+	[ -s server/src/schema.rs ] || cp migrations/schema.unpatched.rs server/src/schema.rs
+	diff -U6 migrations/schema.unpatched.rs server/src/schema.rs > migrations/schema.patch || true
+
+diesel-apply:
+	[ ! -s migrations/schema.patch ] || patch -p0 -o server/src/schema.rs --merge < migrations/schema.patch
+
+diesel-check:
+	@ \
+		check=$(just _diesel-generate-unpatched-helper 2> /dev/null) && \
+		diff -q <(echo "$check") migrations/schema.unpatched.rs > /dev/null || ( \
+			echo "The generated schema differs from server/src/schema.rs. Run 'just diesel-generate'."; \
+			exit 1; \
+		)
+
+	@ \
+		regex='s/^\(\(\+\+\+\|\-\-\-\)[^\t]*\)\t.*$/\1\t<timestamp>/' && \
+		check=$(diff -U6 migrations/schema.unpatched.rs server/src/schema.rs | sed "$regex" || echo '') && \
+		patch=$(sed "$regex" ./migrations/schema.patch) && \
+		diff -q <(echo "$check") <(echo "$patch") > /dev/null || ( \
+			echo "The patch file differs from what would be generated. Run 'just diesel-patch'."; \
+			exit 1; \
+		);
+
+	@echo "Diesel schema and patch are up-to-date!"
+
+_diesel-generate-unpatched:
+	just _diesel-generate-unpatched-helper > migrations/schema.unpatched.rs
+
+_diesel-generate-unpatched-helper:
+	diesel print-schema --patch-file=<(echo '')

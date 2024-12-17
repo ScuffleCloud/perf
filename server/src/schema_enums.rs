@@ -44,7 +44,7 @@ macro_rules! impl_enum {
 }
 
 impl_enum!(GithubCiRunStatus, crate::schema::sql_types::GithubCiRunStatus, {
-    Queued => b"queued",
+	Queued => b"queued",
 	Pending => b"pending",
 	Running => b"running",
 	Success => b"success",

@@ -70,11 +70,11 @@ impl BrawlCommand {
 		let mut conn = database.get().await.context("database get")?;
 
 		match self {
-			BrawlCommand::DryRun(command) => dry_run::handle(client, &mut *conn, context, command).await,
-			BrawlCommand::Review(command) => review::handle(client, &mut *conn, context, command).await,
-			BrawlCommand::Retry => retry::handle(client, &mut *conn, context).await,
-			BrawlCommand::Ping => ping::handle(client, &mut *conn, context).await,
-			BrawlCommand::PullRequest(command) => pr::handle(client, &mut *conn, context, command).await,
+			BrawlCommand::DryRun(command) => dry_run::handle(client, &mut conn, context, command).await,
+			BrawlCommand::Review(command) => review::handle(client, &mut conn, context, command).await,
+			BrawlCommand::Retry => retry::handle(client, &mut conn, context).await,
+			BrawlCommand::Ping => ping::handle(client, &mut conn, context).await,
+			BrawlCommand::PullRequest(command) => pr::handle(client, &mut conn, context, command).await,
 		}
 	}
 }
@@ -93,99 +93,95 @@ impl FromStr for BrawlCommand {
 		let lower = body.to_lowercase();
 		let mut splits = lower.split_whitespace();
 
-		while let Some(command) = splits.find(|s| matches!(*s, "?brawl" | "@brawl" | "/brawl")).and_then(|_| splits.next()) {
-			match command {
-				"r+" | "r-" => {
-					let mut reviewers = Vec::new();
-					let mut priority = None;
+		let Some(command) = splits
+			.find(|s| matches!(*s, "?brawl" | "@brawl" | "/brawl"))
+			.and_then(|_| splits.next())
+		else {
+			return Err(BrawlCommandError::NoCommand);
+		};
 
-					for split in splits.by_ref() {
-						if let Some(split) = split.strip_prefix("r=") {
-							if split.is_empty() {
+		match command {
+			"merge" => {
+				let mut reviewers = Vec::new();
+				let mut priority = None;
+
+				for split in splits.by_ref() {
+					if let Some(split) = split.strip_prefix("r=") {
+						if split.is_empty() {
+							tracing::debug!("invalid syntax, reviewer's name cannot be empty");
+							return Err(BrawlCommandError::InvalidSyntax("reviewer's name cannot be empty".into()));
+						}
+
+						let splits = split.split(',');
+						for reviewer in splits {
+							if reviewer.is_empty() {
 								tracing::debug!("invalid syntax, reviewer's name cannot be empty");
 								return Err(BrawlCommandError::InvalidSyntax("reviewer's name cannot be empty".into()));
 							}
 
-							let splits = split.split(',');
-							for reviewer in splits {
-								if reviewer.is_empty() {
-									tracing::debug!("invalid syntax, reviewer's name cannot be empty");
-									return Err(BrawlCommandError::InvalidSyntax("reviewer's name cannot be empty".into()));
-								}
+							reviewers.push(reviewer.to_string());
+						}
+					} else if let Some(split) = split.strip_prefix("p=") {
+						if split.is_empty() {
+							tracing::debug!("invalid syntax, priority cannot be empty");
+							return Err(BrawlCommandError::InvalidSyntax("priority cannot be empty".into()));
+						}
 
-								reviewers.push(reviewer.to_string());
-							}
-						} else if let Some(split) = split.strip_prefix("p=") {
-							if split.is_empty() {
-								tracing::debug!("invalid syntax, priority cannot be empty");
-								return Err(BrawlCommandError::InvalidSyntax("priority cannot be empty".into()));
-							}
+						let Ok(p) = split.parse() else {
+							tracing::debug!("invalid syntax, priority must be a positive integer");
+							return Err(BrawlCommandError::InvalidSyntax("priority must be a positive integer".into()));
+						};
 
-							let Ok(p) = split.parse() else {
-								tracing::debug!("invalid syntax, priority must be a positive integer");
-								return Err(BrawlCommandError::InvalidSyntax("priority must be a positive integer".into()));
-							};
+						priority = Some(p);
+					} else {
+						break;
+					}
+				}
 
-							priority = Some(p);
+				let action = match command {
+					"r+" => ReviewAction::Approve,
+					"r-" => ReviewAction::Unapprove,
+					_ => unreachable!(),
+				};
+
+				Ok(BrawlCommand::Review(ReviewCommand {
+					action,
+					reviewers,
+					priority,
+				}))
+			}
+			"try" => match splits.next() {
+				Some("cancel") => Ok(BrawlCommand::DryRun(DryRunCommand::Cancel)),
+				mut next => {
+					let mut head_sha = None;
+					let mut base_sha = None;
+
+					while let Some(next_str) = next {
+						if let Some(head) = next_str
+							.strip_prefix("commit=")
+							.or_else(|| next_str.strip_prefix("c="))
+							.or_else(|| next_str.strip_prefix("head="))
+							.or_else(|| next_str.strip_prefix("h="))
+						{
+							head_sha = Some(head.to_string());
+						} else if let Some(base) = next_str.strip_prefix("base=").or_else(|| next_str.strip_prefix("b=")) {
+							base_sha = Some(base.to_string());
 						} else {
 							break;
 						}
+
+						next = splits.next();
 					}
 
-					let action = match command {
-						"r+" => ReviewAction::Approve,
-						"r-" => ReviewAction::Unapprove,
-						_ => unreachable!(),
-					};
-
-					return Ok(BrawlCommand::Review(ReviewCommand {
-						action,
-						reviewers,
-						priority,
-					}));
+					Ok(BrawlCommand::DryRun(DryRunCommand::New { head_sha, base_sha }))
 				}
-				"try" => match splits.next() {
-					Some("cancel") => return Ok(BrawlCommand::DryRun(DryRunCommand::Cancel)),
-					mut next => {
-						let mut head_sha = None;
-						let mut base_sha = None;
-
-						while let Some(next_str) = next {
-							if let Some(head) = next_str
-								.strip_prefix("commit=")
-								.or_else(|| next_str.strip_prefix("c="))
-								.or_else(|| next_str.strip_prefix("head="))
-								.or_else(|| next_str.strip_prefix("h="))
-							{
-								head_sha = Some(head.to_string());
-							} else if let Some(base) = next_str.strip_prefix("base=").or_else(|| next_str.strip_prefix("b="))
-							{
-								base_sha = Some(base.to_string());
-							} else {
-								break;
-							}
-
-							next = splits.next();
-						}
-
-						return Ok(BrawlCommand::DryRun(DryRunCommand::New { head_sha, base_sha }));
-					}
-				},
-				"retry" => {
-					return Ok(BrawlCommand::Retry);
-				}
-				"ping" => {
-					return Ok(BrawlCommand::Ping);
-				}
-				command => {
-					tracing::debug!("invalid command: {}", command);
-					return Err(BrawlCommandError::InvalidCommand(command.into()));
-				}
+			},
+			"retry" => Ok(BrawlCommand::Retry),
+			"ping" => Ok(BrawlCommand::Ping),
+			command => {
+				tracing::debug!("invalid command: {}", command);
+				Err(BrawlCommandError::InvalidCommand(command.into()))
 			}
 		}
-
-		tracing::debug!("no command found");
-
-		Err(BrawlCommandError::NoCommand)
 	}
 }

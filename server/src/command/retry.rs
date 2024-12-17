@@ -4,7 +4,7 @@ use anyhow::Context;
 use diesel_async::AsyncPgConnection;
 
 use super::BrawlCommandContext;
-use crate::ci::{create_ci_run, get_latest_ci_run, Base, Head};
+use crate::ci::{start_ci_run, CiRun, InsertCiRun};
 use crate::github::installation::InstallationClient;
 use crate::pr::{Pr, UpdatePr};
 
@@ -22,16 +22,23 @@ pub async fn handle(
 	let pr = Pr::fetch_or_create(context.repo_id, &context.pr, conn).await?;
 	UpdatePr::new(&context.pr, &pr).do_update(conn).await?;
 
-	let Some(run) = get_latest_ci_run(conn, context.repo_id, context.pr.number as i64).await? else {
-		repo_client.send_message(context.issue_number, "🚨 There has never been a merge run on this PR.").await?;
+	let Some(run) = CiRun::get_latest(conn, context.repo_id, context.pr.number as i64).await? else {
+		repo_client
+			.send_message(context.issue_number, "🚨 There has never been a merge run on this PR.")
+			.await?;
 		return Ok(());
 	};
 
 	if run.completed_at.is_none() {
-		repo_client.send_message(context.issue_number, format!(
-			"🚨 There is currently an active run, cancel it first using `?brawl {}`.",
-			if run.is_dry_run { "-r" } else { "try cancel" }
-		)).await?;
+		repo_client
+			.send_message(
+				context.issue_number,
+				format!(
+					"🚨 There is currently an active run, cancel it first using `?brawl {}`.",
+					if run.is_dry_run { "-r" } else { "try cancel" }
+				),
+			)
+			.await?;
 		return Ok(());
 	}
 
@@ -45,17 +52,19 @@ pub async fn handle(
 		return Ok(());
 	}
 
-	create_ci_run(conn,
-		context.repo_id,
-		context.pr.number as i64,
-		&run.ci_branch,
-		run.priority,
-		context.user.id,
-		&Base::from_string(&run.base_ref).context("bad base ref")?,
-		&Head::from_sha(&run.head_commit_sha),
-		run.is_dry_run,
-	).await?;
-	repo_client.send_message(context.issue_number, "🚨 This PR is currently merging, use `?brawl -r` to cancel a merge run.").await?;
+	let new_run_id = InsertCiRun {
+		github_repo_id: context.repo_id.0 as i64,
+		github_pr_number: context.issue_number as i32,
+		base_ref: &run.base_ref,
+		head_commit_sha: &run.head_commit_sha,
+		run_commit_sha: None,
+		ci_branch: &run.ci_branch,
+		priority: run.priority,
+		requested_by_id: context.user.id.0 as i64,
+		is_dry_run: run.is_dry_run,
+	}
+	.insert(conn, client, &context.config, &[])
+	.await?;
 
 	Ok(())
 }

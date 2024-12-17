@@ -38,8 +38,8 @@ impl<'a> Pr<'a> {
 		Ok(Self {
 			github_repo_id: repo_id.0 as i64,
 			github_pr_number: pr.number as i32,
-			title: Cow::Borrowed(&pr.title.as_deref().unwrap_or("")),
-			body: Cow::Borrowed(&pr.body.as_deref().unwrap_or("")),
+			title: Cow::Borrowed(pr.title.as_deref().unwrap_or("")),
+			body: Cow::Borrowed(pr.body.as_deref().unwrap_or("")),
 			merge_status: match pr.mergeable_state {
 				_ if pr.merged_at.is_some() => GithubPrMergeStatus::Merged,
 				Some(MergeableState::Behind | MergeableState::Blocked | MergeableState::Clean) => GithubPrMergeStatus::Ready,
@@ -68,7 +68,7 @@ impl<'a> Pr<'a> {
 				_ => GithubPrStatus::Open,
 			},
 			default_priority: None,
-			merge_commit_sha: pr.merge_commit_sha.as_deref().map(|s| Cow::Borrowed(s)),
+			merge_commit_sha: pr.merge_commit_sha.as_deref().map(Cow::Borrowed),
 			target_branch: Cow::Borrowed(&pr.base.ref_field),
 			source_branch: Cow::Borrowed(&pr.head.ref_field),
 			latest_commit_sha: Cow::Borrowed(&pr.head.sha),
@@ -167,7 +167,7 @@ impl<'a> UpdatePr<'a> {
 		}
 
 		if pr.merge_commit_sha.as_deref() != current.merge_commit_sha.as_deref() {
-			update.merge_commit_sha = pr.merge_commit_sha.as_deref().map(|s| Cow::Borrowed(s));
+			update.merge_commit_sha = pr.merge_commit_sha.as_deref().map(Cow::Borrowed);
 		}
 
 		let desired_status = match pr.mergeable_state {

@@ -515,13 +515,13 @@ impl<'a> RepoClient<'a> {
 					}
 				}
 				Permission::Team(team) => {
-					let users = self.installation.get_team_users(&team).await?;
+					let users = self.installation.get_team_users(team).await?;
 					if users.contains(&user_id) {
 						return Ok(true);
 					}
 				}
 				Permission::User(user) => {
-					let user = self.installation.get_user_by_name(&user).await?;
+					let user = self.installation.get_user_by_name(user).await?;
 					if user.id == user_id {
 						return Ok(true);
 					}

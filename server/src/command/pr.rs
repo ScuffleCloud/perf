@@ -4,7 +4,7 @@ use anyhow::Context;
 use diesel_async::{AsyncConnection, AsyncPgConnection};
 
 use super::BrawlCommandContext;
-use crate::ci::{cancel_ci_run, get_active_ci_run};
+use crate::ci::CiRun;
 use crate::github::installation::InstallationClient;
 use crate::pr::{Pr, UpdatePr};
 use crate::schema_enums::GithubCiRunStatus;
@@ -37,14 +37,22 @@ pub async fn handle(
 
 			if context.pr.merged_at.is_none() {
 				// We need to cancel the checks on the current run somehow...
-				if let Some(run) = get_active_ci_run(conn, context.repo_id, context.pr.number as i64).await? {
+				if let Some(run) = CiRun::get_active(conn, context.repo_id, context.pr.number as i64).await? {
 					if !run.is_dry_run {
-						cancel_ci_run(conn, run.id, client).await?;
-						repo_client.send_message(context.issue_number, &format!("🚨 PR state was changed while merge was {}, cancelling merge.", match run.status {
-							GithubCiRunStatus::Queued => "queued",
-							GithubCiRunStatus::Pending | GithubCiRunStatus::Running => "in progress",
-							_ => anyhow::bail!("impossible CI status: {:?}", run.status),
-						})).await?;
+						run.cancel(conn, client).await?;
+						repo_client
+							.send_message(
+								context.issue_number,
+								&format!(
+									"🚨 PR state was changed while merge was {}, cancelling merge.",
+									match run.status {
+										GithubCiRunStatus::Queued => "queued",
+										GithubCiRunStatus::Pending | GithubCiRunStatus::Running => "in progress",
+										_ => anyhow::bail!("impossible CI status: {:?}", run.status),
+									}
+								),
+							)
+							.await?;
 					}
 				}
 			}

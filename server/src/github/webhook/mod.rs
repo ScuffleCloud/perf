@@ -166,18 +166,18 @@ fn parse_event(header: &str, body: &[u8]) -> anyhow::Result<WebhookEvent> {
 		organization,
 		installation,
 		mut specific,
-	} = serde_json::from_slice::<Intermediate>(body.as_ref())?;
+	} = serde_json::from_slice::<Intermediate>(body)?;
 
 	// Bug: OctoCrab wrongly requires the pusher to have an email
 	// Remove when https://github.com/XAMPPRocky/octocrab/issues/486 is fixed
 	if kind == WebhookEventType::Push {
-		specific.get_mut("pusher").map(|pusher| {
-			pusher.get_mut("email").map(|email| {
+		if let Some(pusher) = specific.get_mut("pusher") {
+			if let Some(email) = pusher.get_mut("email") {
 				if email.is_null() {
 					*email = serde_json::Value::String("".to_owned())
 				}
-			});
-		});
+			}
+		}
 	}
 
 	let specific = kind.parse_specific_payload(specific)?;
@@ -288,7 +288,7 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
 			let Some(repo_id) = event
 				.repository
 				.as_ref()
-				.or_else(|| pull_request_event.pull_request.repo.as_deref())
+				.or(pull_request_event.pull_request.repo.as_deref())
 				.map(|r| r.id)
 			else {
 				return Ok(());

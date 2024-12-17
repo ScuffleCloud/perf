@@ -4,7 +4,7 @@ use anyhow::Context;
 use diesel_async::AsyncPgConnection;
 
 use super::BrawlCommandContext;
-use crate::ci::{cancel_ci_run, create_ci_run, get_active_ci_run, Head, Base};
+use crate::ci::{Base, CiRun, Head, InsertCiRun};
 use crate::github::installation::InstallationClient;
 use crate::pr::{Pr, UpdatePr};
 
@@ -77,21 +77,24 @@ pub async fn handle(
 			update.reviewer_ids = Some(provided_reviewers);
 		}
 
-		if let Some(run) = get_active_ci_run(conn, context.repo_id, context.pr.number as i64).await? {
-			cancel_ci_run(conn, run.id, client).await?;
+		if let Some(run) = CiRun::get_active(conn, context.repo_id, context.pr.number as i64).await? {
+			run.cancel(conn, client).await?;
 		}
 
 		// We should now start a CI Run for this PR.
-		create_ci_run(conn,
-			context.repo_id,
-			context.pr.number as i64,
-			&context.config.temp_branch_prefix,
-			command.priority.unwrap_or(current.default_priority.unwrap_or(5)),
-			context.user.id,
-			&Base::from_pr(&context.pr),
-			&Head::from_pr(&context.pr),
-			false,
-		).await?;
+		InsertCiRun {
+			github_repo_id: context.repo_id.0 as i64,
+			github_pr_number: context.issue_number as i32,
+			base_ref: &Base::from_pr(&context.pr).to_string(),
+			head_commit_sha: &Head::from_pr(&context.pr).sha(),
+			run_commit_sha: None,
+			ci_branch: &context.config.temp_branch_prefix,
+			priority: command.priority.unwrap_or(current.default_priority.unwrap_or(5)),
+			requested_by_id: context.user.id.0 as i64,
+			is_dry_run: false,
+		}
+		.insert(conn, client, &context.config, &provided_reviewers)
+		.await?;
 	} else if !current.reviewer_ids.is_empty() {
 		let mut new_ids = Vec::new();
 
@@ -112,9 +115,9 @@ pub async fn handle(
 			// If the list is now empty, & there is a CI run, then we should cancel the CI
 			// run.
 			if new_ids.is_empty() {
-				if let Some(run) = get_active_ci_run(conn, context.repo_id, context.pr.number as i64).await? {
+				if let Some(run) = CiRun::get_active(conn, context.repo_id, context.pr.number as i64).await? {
 					if !run.is_dry_run {
-						cancel_ci_run(conn, run.id, client).await?;
+						run.cancel(conn, client).await?;
 					}
 				}
 			}
