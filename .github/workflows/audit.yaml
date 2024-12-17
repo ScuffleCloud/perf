@@ -1,6 +1,8 @@
 name: Security audit
 on:
   push:
+    branches-ignore:
+      - 'automation/**'
     paths:
       - '.github/workflows/audit.yaml'
       - '**/Cargo.toml'
