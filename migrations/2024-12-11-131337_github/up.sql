@@ -1,43 +1,3 @@
-CREATE TYPE github_ci_run_status AS ENUM (
-    'queued',
-    'running',
-    'success',
-    'failure',
-    'timed_out'
-);
-
-CREATE TABLE github_ci_runs (
-    id SERIAL PRIMARY KEY,
-    github_repo_id BIGINT NOT NULL,
-    -- On GitHub issue numbers are also PR numbers, the difference is that PRs have a commit SHA / HEAD ref
-    -- and issues don't.
-    github_issue_number INT NOT NULL,
-    status github_ci_run_status NOT NULL,
-    -- The base of the run:
-    -- Must start with either `branch:` or `commit:` followed by the branch name or commit SHA
-    base_ref TEXT NOT NULL,
-    -- The SHA of the head commit (the commit we are merging from)
-    head_commit_sha TEXT NOT NULL,
-    -- The SHA of the commit that was run (if the run was successful), null if the run has not started yet.
-    run_commit_sha TEXT,
-    -- A concurrency group only allows one CI run to be active at a time.
-    ci_branch TEXT NOT NULL,
-    -- The priority of the CI run (higher priority runs are run first)
-    priority INT NOT NULL,
-    -- The ID of the user who requested the CI run (on GitHub)
-    requested_by_id BIGINT NOT NULL,
-    -- The time the CI run was completed
-    completed_at TIMESTAMPTZ,
-    -- The time the CI run was created
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    -- The time the CI run was last updated
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- This index enforces the concurrency group constraint, ensuring that only one CI run
--- can be running at a time on a given repository concurrency group.
-CREATE UNIQUE INDEX github_ci_runs_ci_branch_idx ON github_ci_runs (github_repo_id, ci_branch) WHERE status = 'running';
-
 
 CREATE TYPE github_pr_status AS ENUM (
     'open',
@@ -79,8 +39,6 @@ CREATE TABLE github_pr (
     assigned_ids BIGINT[] NOT NULL CHECK (array_length(assigned_ids, 1) <= 10 AND array_position(assigned_ids, NULL) IS NULL),
     -- The status of the PR (on GitHub)
     status github_pr_status NOT NULL,
-    -- The ID of the CI run that merged this PR (if it was merged)
-    merge_ci_run_id INT,
     -- The SHA of the merge commit (if the PR was merged)
     merge_commit_sha TEXT,
     -- The target branch of the PR
@@ -97,6 +55,60 @@ CREATE TABLE github_pr (
     -- The default priority of the PR
     default_priority INT,
 
-    FOREIGN KEY (merge_ci_run_id) REFERENCES github_ci_runs(id) ON DELETE SET NULL,
     PRIMARY KEY (github_repo_id, github_pr_number)
 );
+
+
+CREATE TYPE github_ci_run_status AS ENUM (
+    -- We havent started the run yet.
+    'queued',
+    -- We have started the run but github has not yet started the CI run.
+    'pending',
+    -- We have started the run and github has started the CI run.
+    'running',
+    -- The CI run completed successfully.
+    'success',
+    -- The CI run failed.
+    'failure',
+    -- The CI run was cancelled.
+    'cancelled'
+);
+
+CREATE TABLE github_ci_runs (
+    id SERIAL PRIMARY KEY,
+    github_repo_id BIGINT NOT NULL,
+    github_pr_number INT NOT NULL,
+    status github_ci_run_status NOT NULL,
+    -- The base of the run:
+    -- Must start with either `branch:` or `commit:` followed by the branch name or commit SHA
+    base_ref TEXT NOT NULL,
+    -- The SHA of the head commit (the commit we are merging from)
+    head_commit_sha TEXT NOT NULL,
+    -- The SHA of the commit that was run (if the run was successful), null if the run has not started yet.
+    run_commit_sha TEXT,
+    -- A concurrency group only allows one CI run to be active at a time.
+    ci_branch TEXT NOT NULL,
+    -- The priority of the CI run (higher priority runs are run first)
+    priority INT NOT NULL,
+    -- The ID of the user who requested the CI run (on GitHub)
+    requested_by_id BIGINT NOT NULL,
+    -- Is dry run?
+    is_dry_run BOOLEAN NOT NULL,
+    -- The time the CI run was completed
+    completed_at TIMESTAMPTZ,
+    -- The time the CI run was started
+    started_at TIMESTAMPTZ,
+    -- The time the CI run was created
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- The time the CI run was last updated
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    FOREIGN KEY (github_repo_id, github_pr_number) REFERENCES github_pr(github_repo_id, github_pr_number) ON DELETE CASCADE
+);
+
+-- This index enforces the concurrency group constraint, ensuring that only one CI run
+-- can be running at a time on a given repository concurrency group.
+CREATE UNIQUE INDEX github_ci_runs_ci_branch_idx ON github_ci_runs (github_repo_id, ci_branch) WHERE status = 'pending' OR status = 'running';
+
+-- This index ensures that only one CI run can be running at a time for a given PR.
+CREATE UNIQUE INDEX github_ci_runs_pr_idx ON github_ci_runs (github_repo_id, github_pr_number) WHERE completed_at IS NULL;

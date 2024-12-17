@@ -10,8 +10,7 @@ use diesel_async::pooled_connection::bb8;
 use diesel_async::AsyncPgConnection;
 use hmac::{Hmac, Mac};
 use octocrab::models::webhook_events::payload::{
-	InstallationWebhookEventAction, IssueCommentWebhookEventAction, PullRequestReviewCommentWebhookEventAction,
-	PullRequestWebhookEventAction,
+	InstallationWebhookEventAction, IssueCommentWebhookEventAction, PullRequestWebhookEventAction,
 };
 use octocrab::models::webhook_events::{EventInstallation, WebhookEventPayload, WebhookEventType};
 use scuffle_context::ContextFutExt;
@@ -19,10 +18,9 @@ use scuffle_http::backend::HttpServer;
 use serde::Serialize;
 use sha2::Sha256;
 
+use super::GitHubService;
 use crate::command::pr::PullRequestCommand;
 use crate::command::{BrawlCommand, BrawlCommandContext};
-
-use super::GitHubService;
 
 pub trait WebhookConfig: Send + Sync + 'static {
 	fn webhook_secret(&self) -> &str;
@@ -297,9 +295,6 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
 			};
 
 			let config = client.get_repo_config(repo_id).await?;
-			if !config.enabled {
-				return Ok(());
-			}
 
 			let Some(author) = event
 				.sender
@@ -317,51 +312,15 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
 						repo_id,
 						user: author.into(),
 						issue_number: pull_request_event.pull_request.number,
-						pr: Some(pull_request_event.pull_request),
-						config,
-					},
-				)
-				.await?;
-		}
-		WebhookEventPayload::PullRequestReviewComment(mut pr_review_comment_event)
-			if pr_review_comment_event.action == PullRequestReviewCommentWebhookEventAction::Created =>
-		{
-			let Some(author) = pr_review_comment_event.comment.user else {
-				return Ok(());
-			};
-
-			let Ok(command) = BrawlCommand::from_str(&pr_review_comment_event.comment.body) else {
-				return Ok(());
-			};
-
-			let Some(repo) = event
-				.repository
-				.or_else(|| pr_review_comment_event.pull_request.repo.take().map(|r| *r))
-			else {
-				return Ok(());
-			};
-
-			let config = client.get_repo_config(repo.id).await?;
-			if !config.enabled {
-				return Ok(());
-			}
-
-			command
-				.handle(
-					&client,
-					global.database_pool(),
-					BrawlCommandContext {
-						repo_id: repo.id,
-						user: author.into(),
-						issue_number: pr_review_comment_event.pull_request.number,
-						pr: Some(pr_review_comment_event.pull_request),
+						pr: pull_request_event.pull_request,
 						config,
 					},
 				)
 				.await?;
 		}
 		WebhookEventPayload::IssueComment(issue_comment_event)
-			if issue_comment_event.action == IssueCommentWebhookEventAction::Created =>
+			if issue_comment_event.action == IssueCommentWebhookEventAction::Created
+				&& issue_comment_event.issue.pull_request.is_some() =>
 		{
 			let Some(body) = issue_comment_event.comment.body.as_ref() else {
 				return Ok(());
@@ -381,11 +340,7 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
 				return Ok(());
 			};
 
-			let pr = if issue_comment_event.issue.pull_request.is_some() {
-				Some(repo_client.get_pull_request(issue_comment_event.issue.number).await?)
-			} else {
-				None
-			};
+			let pr = repo_client.get_pull_request(issue_comment_event.issue.number).await?;
 
 			command
 				.handle(

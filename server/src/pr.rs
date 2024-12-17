@@ -6,7 +6,7 @@ use diesel::query_dsl::methods::{FindDsl, SelectDsl};
 use diesel::{OptionalExtension, Selectable, SelectableHelper};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use octocrab::models::pulls::{MergeableState, PullRequest};
-use octocrab::models::{IssueState, RepositoryId, UserId};
+use octocrab::models::{IssueState, RepositoryId};
 
 use crate::schema_enums::{GithubPrMergeStatus, GithubPrStatus};
 
@@ -14,7 +14,7 @@ use crate::schema_enums::{GithubPrMergeStatus, GithubPrStatus};
 #[diesel(check_for_backend(diesel::pg::Pg))]
 #[diesel(table_name = crate::schema::github_pr)]
 #[diesel(primary_key(github_repo_id, github_pr_number))]
-pub struct PrMergeQueue<'a> {
+pub struct Pr<'a> {
 	pub github_repo_id: i64,
 	pub github_pr_number: i32,
 	pub title: Cow<'a, str>,
@@ -25,7 +25,6 @@ pub struct PrMergeQueue<'a> {
 	pub assigned_ids: Vec<i64>,
 	pub status: GithubPrStatus,
 	pub default_priority: Option<i32>,
-	pub merge_ci_run_id: Option<i32>,
 	pub merge_commit_sha: Option<Cow<'a, str>>,
 	pub target_branch: Cow<'a, str>,
 	pub source_branch: Cow<'a, str>,
@@ -34,9 +33,9 @@ pub struct PrMergeQueue<'a> {
 	pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl<'a> PrMergeQueue<'a> {
-	pub fn new(pr: &'a PullRequest, repo_id: RepositoryId, user_id: UserId) -> Self {
-		Self {
+impl<'a> Pr<'a> {
+	pub fn new(pr: &'a PullRequest, repo_id: RepositoryId) -> anyhow::Result<Self> {
+		Ok(Self {
 			github_repo_id: repo_id.0 as i64,
 			github_pr_number: pr.number as i32,
 			title: Cow::Borrowed(&pr.title.as_deref().unwrap_or("")),
@@ -50,7 +49,7 @@ impl<'a> PrMergeQueue<'a> {
 				Some(MergeableState::Draft) => GithubPrMergeStatus::NotReady,
 				_ => GithubPrMergeStatus::Ready,
 			},
-			author_id: user_id.0 as i64,
+			author_id: pr.user.as_ref().map(|user| user.id.0 as i64).context("author id")?,
 			reviewer_ids: vec![],
 			assigned_ids: {
 				let mut ids = pr
@@ -69,42 +68,42 @@ impl<'a> PrMergeQueue<'a> {
 				_ => GithubPrStatus::Open,
 			},
 			default_priority: None,
-			merge_ci_run_id: None,
 			merge_commit_sha: pr.merge_commit_sha.as_deref().map(|s| Cow::Borrowed(s)),
 			target_branch: Cow::Borrowed(&pr.base.ref_field),
 			source_branch: Cow::Borrowed(&pr.head.ref_field),
 			latest_commit_sha: Cow::Borrowed(&pr.head.sha),
 			created_at: chrono::Utc::now(),
 			updated_at: chrono::Utc::now(),
-		}
+		})
 	}
 
-	pub async fn fetch(
+	pub async fn fetch_or_create(
 		repo_id: RepositoryId,
-		user_id: UserId,
 		pr: &'a PullRequest,
 		conn: &mut AsyncPgConnection,
 	) -> anyhow::Result<Self> {
-		let current: Option<PrMergeQueue<'static>> = crate::schema::github_pr::table
-			.find((repo_id.0 as i64, pr.number as i32))
-			.select(PrMergeQueue::as_select())
-			.first(conn)
-			.await
-			.optional()
-			.context("select")?;
-
-		let current = if let Some(current) = current {
-			current
+		if let Some(current) = Self::fetch(conn, repo_id, pr.number as i64).await? {
+			Ok(current)
 		} else {
-			let insert = PrMergeQueue::new(pr, repo_id, user_id);
+			let insert = Pr::new(pr, repo_id).context("new")?;
 			diesel::insert_into(crate::schema::github_pr::dsl::github_pr)
 				.values(&insert)
 				.execute(conn)
 				.await
 				.context("upsert github pr")?;
 
-			insert
-		};
+			Ok(insert)
+		}
+	}
+
+	pub async fn fetch(conn: &mut AsyncPgConnection, repo_id: RepositoryId, pr_number: i64) -> anyhow::Result<Option<Self>> {
+		let current: Option<Pr<'static>> = crate::schema::github_pr::table
+			.find((repo_id.0 as i64, pr_number as i32))
+			.select(Pr::as_select())
+			.first(conn)
+			.await
+			.optional()
+			.context("select")?;
 
 		Ok(current)
 	}
@@ -113,7 +112,7 @@ impl<'a> PrMergeQueue<'a> {
 #[derive(AsChangeset)]
 #[diesel(table_name = crate::schema::github_pr)]
 #[diesel(primary_key(github_repo_id, github_pr_number))]
-pub struct UpdatePrMergeQueue<'a> {
+pub struct UpdatePr<'a> {
 	#[allow(unused)]
 	pub github_repo_id: i64,
 	#[allow(unused)]
@@ -121,17 +120,19 @@ pub struct UpdatePrMergeQueue<'a> {
 	pub title: Option<Cow<'a, str>>,
 	pub body: Option<Cow<'a, str>>,
 	pub merge_status: Option<GithubPrMergeStatus>,
-	pub assigned_ids: Option<Vec<i64>>,
 	pub reviewer_ids: Option<Vec<i64>>,
-	pub default_priority: Option<i32>,
+	pub assigned_ids: Option<Vec<i64>>,
 	pub status: Option<GithubPrStatus>,
+	pub merge_commit_sha: Option<Cow<'a, str>>,
 	pub target_branch: Option<Cow<'a, str>>,
+	pub source_branch: Option<Cow<'a, str>>,
+	pub default_priority: Option<i32>,
 	pub latest_commit_sha: Option<Cow<'a, str>>,
 	pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-impl<'a> UpdatePrMergeQueue<'a> {
-	pub fn new(pr: &'a PullRequest, current: &PrMergeQueue<'_>) -> Self {
+impl<'a> UpdatePr<'a> {
+	pub fn new(pr: &'a PullRequest, current: &Pr<'_>) -> Self {
 		let mut update = Self {
 			github_repo_id: current.github_repo_id,
 			github_pr_number: current.github_pr_number,
@@ -144,6 +145,8 @@ impl<'a> UpdatePrMergeQueue<'a> {
 			default_priority: None,
 			target_branch: None,
 			latest_commit_sha: None,
+			merge_commit_sha: None,
+			source_branch: None,
 			updated_at: chrono::Utc::now(),
 		};
 
@@ -161,6 +164,10 @@ impl<'a> UpdatePrMergeQueue<'a> {
 
 		if pr.head.sha != current.latest_commit_sha {
 			update.latest_commit_sha = Some(Cow::Borrowed(&pr.head.sha));
+		}
+
+		if pr.merge_commit_sha.as_deref() != current.merge_commit_sha.as_deref() {
+			update.merge_commit_sha = pr.merge_commit_sha.as_deref().map(|s| Cow::Borrowed(s));
 		}
 
 		let desired_status = match pr.mergeable_state {
@@ -222,8 +229,4 @@ impl<'a> UpdatePrMergeQueue<'a> {
 
 		Ok(())
 	}
-}
-
-pub fn commit_link(owner: &str, repo: &str, sha: &str) -> String {
-	format!("https://github.com/{}/{}/commit/{}", owner, repo, sha)
 }

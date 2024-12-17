@@ -5,26 +5,12 @@ use serde::{Deserialize, Deserializer};
 #[derive(Debug, Deserialize, Clone, smart_default::SmartDefault)]
 #[serde(default)]
 pub struct GitHubBrawlRepoConfig {
-	/// If the repo is enabled (default: true)
+	/// Whether Brawl is enabled for this repo
 	#[default(true)]
 	pub enabled: bool,
-
-	/// The queue config
-	pub queue: GitHubBrawlQueueConfig,
-}
-
-#[derive(Debug, Deserialize, Clone, smart_default::SmartDefault)]
-#[serde(default)]
-pub struct GitHubBrawlQueueConfig {
-	/// If the queue is enabled (default: true)
-	#[default(true)]
-	pub enabled: bool,
-	/// The global concurrency for all CI runs (default: unlimited)
-	#[default(None)]
-	pub global_concurrency: Option<u32>,
 	/// Labels to attach to PRs on different states
 	pub labels: GitHubBrawlLabelsConfig,
-	/// The branches that can be merged into
+	/// The target branches that this queue matches against.
 	pub branches: Vec<String>,
 	/// The branch prefix for @brawl try commands (default:
 	/// "automation/brawl/try/")
@@ -34,8 +20,8 @@ pub struct GitHubBrawlQueueConfig {
 	/// "automation/brawl/merge/")
 	#[default("automation/brawl/merge/")]
 	pub merge_branch_prefix: String,
-	/// The branch prefix for temp branches used when performing merges (default:
-	/// "automation/brawl/temp/")
+	/// The branch prefix for temp branches used when performing merges
+	/// (default: "automation/brawl/temp/")
 	#[default("automation/brawl/temp/")]
 	pub temp_branch_prefix: String,
 	/// The permissions required to merge a PR (default: ["role:write"])
@@ -47,25 +33,34 @@ pub struct GitHubBrawlQueueConfig {
 	pub try_permissions: Option<Vec<Permission>>,
 }
 
+impl GitHubBrawlRepoConfig {
+	pub fn missing() -> Self {
+		Self {
+			enabled: false,
+			..Default::default()
+		}
+	}
+
+	pub fn try_permissions(&self) -> &[Permission] {
+		self.try_permissions.as_ref().unwrap_or(&self.merge_permissions)
+	}
+}
+
 #[derive(Debug, Deserialize, Clone, smart_default::SmartDefault)]
 #[serde(default)]
 pub struct GitHubBrawlLabelsConfig {
-	/// The label to attach to PRs when they are merged
-	pub on_merge_success: Option<String>,
-	/// The label to attach to PRs when they fail to merge
-	pub on_merge_failure: Option<String>,
-	/// The label to attach to PRs when they are being merged
-	pub on_merge_in_progress: Option<String>,
 	/// The label to attach to PRs when they are in the merge queue
 	pub on_merge_queued: Option<String>,
+	/// The label to attach to PRs when they are being merged
+	pub on_merge_in_progress: Option<String>,
+	/// The label to attach to PRs when they fail to merge
+	pub on_merge_failure: Option<String>,
+	/// The label to attach to PRs when they are merged
+	pub on_merge_success: Option<String>,
 	/// The label to attach to PRs when they are being tried
 	pub on_try_in_progress: Option<String>,
-	/// The label to attach to PRs when they are successfully tried
-	pub on_try_success: Option<String>,
 	/// The label to attach to PRs when they fail to try
 	pub on_try_failure: Option<String>,
-	/// The label to attach to PRs when they are in the try queue
-	pub on_try_queued: Option<String>,
 }
 
 #[derive(Debug, Clone)]

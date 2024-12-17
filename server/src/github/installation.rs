@@ -226,19 +226,13 @@ impl InstallationClient {
 						},
 						..
 					}) => {
-						return Ok(GitHubBrawlRepoConfig {
-							enabled: true,
-							..Default::default()
-						})
+						return Ok(GitHubBrawlRepoConfig::missing());
 					}
 					Err(e) => return Err(e.into()),
 				};
 
 				if file.items.is_empty() {
-					return Ok(GitHubBrawlRepoConfig {
-						enabled: true,
-						..Default::default()
-					});
+					return Ok(GitHubBrawlRepoConfig::missing());
 				}
 
 				if file.items.len() != 1 {
@@ -341,23 +335,6 @@ impl<'a> RepoClient<'a> {
 			.context("get role members")
 	}
 
-	pub async fn has_permission(&self, user_id: UserId, permission: &Permission) -> anyhow::Result<bool> {
-		match permission {
-			Permission::Role(role) => {
-				let users = self.get_role_members(*role).await?;
-				Ok(users.contains(&user_id))
-			}
-			Permission::Team(team) => {
-				let users = self.installation.get_team_users(&team).await?;
-				Ok(users.contains(&user_id))
-			}
-			Permission::User(user) => {
-				let user = self.installation.get_user_by_name(&user).await?;
-				Ok(user.id == user_id)
-			}
-		}
-	}
-
 	pub async fn send_message(&self, issue_number: u64, message: impl AsRef<str>) -> anyhow::Result<()> {
 		self.installation
 			.client()
@@ -390,9 +367,12 @@ impl<'a> RepoClient<'a> {
 
 		let tmp_branch = format!("{}/{}", tmp_branch_prefix.trim_end_matches('/'), uuid::Uuid::new_v4());
 
-		self.push_branch(&tmp_branch, base_sha, true).await.context("push tmp branch")?;
+		self.push_branch(&tmp_branch, base_sha, true)
+			.await
+			.context("push tmp branch")?;
 
-		let commit = self.installation
+		let commit = self
+			.installation
 			.client()
 			.post::<_, Commit>(
 				format!("/repos/{}/{}/merges", repo.owner.unwrap().login, repo.name),
@@ -523,6 +503,33 @@ impl<'a> RepoClient<'a> {
 			}) => Ok(None),
 			Err(e) => Err(e).context("get ref"),
 		}
+	}
+
+	pub async fn has_permission(&self, user_id: UserId, permissions: &[Permission]) -> anyhow::Result<bool> {
+		for permission in permissions {
+			match permission {
+				Permission::Role(role) => {
+					let users = self.get_role_members(*role).await?;
+					if users.contains(&user_id) {
+						return Ok(true);
+					}
+				}
+				Permission::Team(team) => {
+					let users = self.installation.get_team_users(&team).await?;
+					if users.contains(&user_id) {
+						return Ok(true);
+					}
+				}
+				Permission::User(user) => {
+					let user = self.installation.get_user_by_name(&user).await?;
+					if user.id == user_id {
+						return Ok(true);
+					}
+				}
+			}
+		}
+
+		Ok(false)
 	}
 }
 

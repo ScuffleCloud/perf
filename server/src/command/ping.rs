@@ -13,15 +13,7 @@ pub async fn handle(
 ) -> anyhow::Result<()> {
 	// I think we should have some info like the time it took to respond.
 	// The user name, & their permissions.
-	let status = if context.config.enabled {
-		if context.config.queue.enabled {
-			"enabled with queue"
-		} else {
-			"enabled without queue"
-		}
-	} else {
-		"disabled"
-	};
+	let status = if context.config.enabled { "enabled" } else { "disabled" };
 
 	// Should we also say what permissions the user has?
 	let message = format!(

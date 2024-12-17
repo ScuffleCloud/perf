@@ -1,49 +1,17 @@
-[queue]
 enabled = true
 
-# Target branches that can PRs can be merged into
 branches = [
     "main",
 ]
 
-# A branch prefix for `@brawl try` attempts
-# Will append the PR number to the end of the prefix:
-# `automation/brawl/try/<pr_number>`
-# Like: `automation/brawl/try/123`
-try_branch_prefix = "automation/brawl/try/"
-
-# A branch prefix for @brawl +r commands
-# Will append the target branch name to the end of the prefix:
-# `automation/brawl/merge/<target_branch_name>`
-# Like: `automation/brawl/merge/main`
-merge_branch_prefix = "automation/brawl/merge/"
-
-# The branch prefix for temporary branches created when performing merges
-# Will append the target branch name to the end of the prefix:
-# `automation/brawl/temp/<uuid>`
-# Like: `automation/brawl/temp/79570502-0e92-4c6c-87fe-636b2490c77d`
-temp_branch_prefix = "automation/brawl/temp/"
-
-# By default only users with `write` access can merge PRs
 merge_permissions = [
-    "role:write", # include anyone with write access
-    # "team:<team_name>", # include members of this team
-    # "user:<username>", # include this user
+    "role:write",
 ]
 
-# By default it will be the same as the merge permissions
-# try_permissions = [
-#     "role:write",
-#     "team:<team_name>",
-#     "user:<username>",
-# ]
-
-[queue.labels]
-on_merge_queued = "waiting-for-brawl-merg2e"
-on_merge_in_progress = "running-brawl-merge"
-on_merge_failure = "brawl-merge-failed"
-on_merge_success = "merged-by-brawl"
-on_try_queued = "waiting-for-brawl-try"
-on_try_in_progress = "running-brawl-try"
-on_try_failure = "brawl-try-failed"
-on_try_success = "brawl-try-success"
+[labels]
+on_merge_queued = "B-brawl-queued"
+on_merge_in_progress = "B-brawl-merging"
+on_merge_failure = "B-brawl-failed"
+on_merge_success = "B-brawl-merged"
+on_try_in_progress = "B-brawl-try"
+on_try_failure = "B-brawl-try-failed"

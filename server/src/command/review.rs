@@ -3,9 +3,10 @@ use std::sync::Arc;
 use anyhow::Context;
 use diesel_async::AsyncPgConnection;
 
-use super::utils::{PrMergeQueue, UpdatePrMergeQueue};
 use super::BrawlCommandContext;
+use crate::ci::{cancel_ci_run, create_ci_run, get_active_ci_run, Head, Base};
 use crate::github::installation::InstallationClient;
+use crate::pr::{Pr, UpdatePr};
 
 #[derive(Debug)]
 pub struct ReviewCommand {
@@ -26,38 +27,27 @@ pub async fn handle(
 	context: BrawlCommandContext,
 	command: ReviewCommand,
 ) -> anyhow::Result<()> {
-	if !context.config.queue.enabled {
+	if !context.config.enabled {
 		return Ok(());
 	}
-
-	let Some(pr) = context.pr else {
-		tracing::debug!("pull request missing");
-		return Ok(());
-	};
 
 	let repo_client = client.get_repository(context.repo_id).context("get repository")?;
 
-	// Check if the user has permission to do this. (only merge)
-	let mut has_permission = false;
-	for permission in &context.config.queue.merge_permissions {
-		if repo_client.has_permission(context.user.id, permission).await? {
-			has_permission = true;
-			break;
-		}
-	}
-
-	if !has_permission {
+	if !repo_client
+		.has_permission(context.user.id, &context.config.merge_permissions)
+		.await?
+	{
 		tracing::debug!("user does not have permission to do this");
 		return Ok(());
 	}
 
-	if pr.merged_at.is_some() {
+	if context.pr.merged_at.is_some() {
 		tracing::debug!("pull request already merged");
 		return Ok(());
 	}
 
-	let current = PrMergeQueue::fetch(context.repo_id, context.user.id, &pr, conn).await?;
-	let mut update = UpdatePrMergeQueue::new(&pr, &current);
+	let current = Pr::fetch_or_create(context.repo_id, &context.pr, conn).await?;
+	let mut update = UpdatePr::new(&context.pr, &current);
 
 	if let Some(priority) = command.priority {
 		update.default_priority = Some(priority);
@@ -87,7 +77,21 @@ pub async fn handle(
 			update.reviewer_ids = Some(provided_reviewers);
 		}
 
+		if let Some(run) = get_active_ci_run(conn, context.repo_id, context.pr.number as i64).await? {
+			cancel_ci_run(conn, run.id, client).await?;
+		}
+
 		// We should now start a CI Run for this PR.
+		create_ci_run(conn,
+			context.repo_id,
+			context.pr.number as i64,
+			&context.config.temp_branch_prefix,
+			command.priority.unwrap_or(current.default_priority.unwrap_or(5)),
+			context.user.id,
+			&Base::from_pr(&context.pr),
+			&Head::from_pr(&context.pr),
+			false,
+		).await?;
 	} else if !current.reviewer_ids.is_empty() {
 		let mut new_ids = Vec::new();
 
@@ -108,8 +112,10 @@ pub async fn handle(
 			// If the list is now empty, & there is a CI run, then we should cancel the CI
 			// run.
 			if new_ids.is_empty() {
-				if let Some(current_run_id) = current.merge_ci_run_id {
-					// Cancel the CI run somehow...
+				if let Some(run) = get_active_ci_run(conn, context.repo_id, context.pr.number as i64).await? {
+					if !run.is_dry_run {
+						cancel_ci_run(conn, run.id, client).await?;
+					}
 				}
 			}
 

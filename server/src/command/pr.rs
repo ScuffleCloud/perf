@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
-use diesel_async::AsyncPgConnection;
+use anyhow::Context;
+use diesel_async::{AsyncConnection, AsyncPgConnection};
 
-use super::utils::{PrMergeQueue, UpdatePrMergeQueue};
 use super::BrawlCommandContext;
+use crate::ci::{cancel_ci_run, get_active_ci_run};
 use crate::github::installation::InstallationClient;
+use crate::pr::{Pr, UpdatePr};
+use crate::schema_enums::GithubCiRunStatus;
 
 #[derive(Debug)]
 pub enum PullRequestCommand {
@@ -16,30 +19,38 @@ pub enum PullRequestCommand {
 }
 
 pub async fn handle(
-	_: &Arc<InstallationClient>,
+	client: &Arc<InstallationClient>,
 	conn: &mut AsyncPgConnection,
 	context: BrawlCommandContext,
 	_: PullRequestCommand,
 ) -> anyhow::Result<()> {
-	let Some(pr) = &context.pr else {
-		anyhow::bail!("pull request command missing pull request");
-	};
-
-	let user_id = pr.user.as_ref().map(|user| user.id).unwrap_or(context.user.id);
-
 	// Try select the PR in the database first
-	let current = PrMergeQueue::fetch(context.repo_id, user_id, pr, conn).await?;
 
-	// Try figure out what changed
-	UpdatePrMergeQueue::new(pr, &current).do_update(conn).await?;
+	let repo_client = client.get_repository(context.repo_id).context("get repository")?;
 
-	if let Some(Some(current_run_id)) = pr.merged_at.is_none().then_some(current.merge_ci_run_id) {
-		// We need to cancel the checks on the current run somehow...
-	}
+	conn.transaction(|conn| {
+		Box::pin(async move {
+			let current = Pr::fetch_or_create(context.repo_id, &context.pr, conn).await?;
 
-	if !context.config.queue.enabled {
-		return Ok(());
-	}
+			// Try figure out what changed
+			UpdatePr::new(&context.pr, &current).do_update(conn).await?;
 
-	Ok(())
+			if context.pr.merged_at.is_none() {
+				// We need to cancel the checks on the current run somehow...
+				if let Some(run) = get_active_ci_run(conn, context.repo_id, context.pr.number as i64).await? {
+					if !run.is_dry_run {
+						cancel_ci_run(conn, run.id, client).await?;
+						repo_client.send_message(context.issue_number, &format!("🚨 PR state was changed while merge was {}, cancelling merge.", match run.status {
+							GithubCiRunStatus::Queued => "queued",
+							GithubCiRunStatus::Pending | GithubCiRunStatus::Running => "in progress",
+							_ => anyhow::bail!("impossible CI status: {:?}", run.status),
+						})).await?;
+					}
+				}
+			}
+
+			Ok(())
+		})
+	})
+	.await
 }

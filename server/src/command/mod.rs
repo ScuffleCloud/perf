@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use diesel_async::pooled_connection::bb8;
-use diesel_async::{AsyncPgConnection, TransactionManager};
+use diesel_async::AsyncPgConnection;
 use dry_run::DryRunCommand;
 use octocrab::models::pulls::PullRequest;
 use octocrab::models::{Author, RepositoryId, UserId, UserProfile};
@@ -13,18 +13,15 @@ use review::{ReviewAction, ReviewCommand};
 use crate::github::config::GitHubBrawlRepoConfig;
 use crate::github::installation::InstallationClient;
 
-pub mod cancel;
 pub mod dry_run;
 pub mod ping;
 pub mod pr;
 pub mod retry;
 pub mod review;
-mod utils;
 
 pub enum BrawlCommand {
 	DryRun(DryRunCommand),
 	Review(ReviewCommand),
-	Cancel,
 	Retry,
 	Ping,
 	PullRequest(PullRequestCommand),
@@ -59,7 +56,7 @@ pub struct BrawlCommandContext {
 	pub repo_id: RepositoryId,
 	pub user: User,
 	pub issue_number: u64,
-	pub pr: Option<PullRequest>,
+	pub pr: PullRequest,
 	pub config: GitHubBrawlRepoConfig,
 }
 
@@ -72,50 +69,32 @@ impl BrawlCommand {
 	) -> anyhow::Result<()> {
 		let mut conn = database.get().await.context("database get")?;
 
-		diesel_async::AnsiTransactionManager::begin_transaction(&mut *conn)
-			.await
-			.context("begin transaction")?;
-
-		let result = match self {
+		match self {
 			BrawlCommand::DryRun(command) => dry_run::handle(client, &mut *conn, context, command).await,
 			BrawlCommand::Review(command) => review::handle(client, &mut *conn, context, command).await,
-			BrawlCommand::Cancel => cancel::handle(client, &mut *conn, context).await,
 			BrawlCommand::Retry => retry::handle(client, &mut *conn, context).await,
 			BrawlCommand::Ping => ping::handle(client, &mut *conn, context).await,
 			BrawlCommand::PullRequest(command) => pr::handle(client, &mut *conn, context, command).await,
-		};
-
-		if let Err(err) = result {
-			if let Err(tx_err) = diesel_async::AnsiTransactionManager::rollback_transaction(&mut *conn)
-				.await
-				.context("rollback transaction")
-			{
-				tracing::error!("failed to rollback transaction: {:#}", tx_err);
-			}
-
-			Err(err)
-		} else {
-			diesel_async::AnsiTransactionManager::commit_transaction(&mut *conn)
-				.await
-				.context("commit transaction")?;
-			Ok(())
 		}
 	}
 }
 
+pub enum BrawlCommandError {
+	NoCommand,
+	InvalidCommand(String),
+	InvalidSyntax(String),
+	InvalidArgument(String),
+}
+
 impl FromStr for BrawlCommand {
-	type Err = ();
+	type Err = BrawlCommandError;
 
 	fn from_str(body: &str) -> Result<Self, Self::Err> {
 		let lower = body.to_lowercase();
 		let mut splits = lower.split_whitespace();
 
-		while let Some(command) = splits.next() {
-			if !command.eq_ignore_ascii_case("?brawl") {
-				continue;
-			}
-
-			match splits.next().unwrap_or_default() {
+		while let Some(command) = splits.find(|s| matches!(*s, "?brawl" | "@brawl" | "/brawl")).and_then(|_| splits.next()) {
+			match command {
 				"r+" | "r-" => {
 					let mut reviewers = Vec::new();
 					let mut priority = None;
@@ -124,14 +103,14 @@ impl FromStr for BrawlCommand {
 						if let Some(split) = split.strip_prefix("r=") {
 							if split.is_empty() {
 								tracing::debug!("invalid syntax, reviewer's name cannot be empty");
-								return Err(());
+								return Err(BrawlCommandError::InvalidSyntax("reviewer's name cannot be empty".into()));
 							}
 
 							let splits = split.split(',');
 							for reviewer in splits {
 								if reviewer.is_empty() {
 									tracing::debug!("invalid syntax, reviewer's name cannot be empty");
-									return Err(());
+									return Err(BrawlCommandError::InvalidSyntax("reviewer's name cannot be empty".into()));
 								}
 
 								reviewers.push(reviewer.to_string());
@@ -139,12 +118,12 @@ impl FromStr for BrawlCommand {
 						} else if let Some(split) = split.strip_prefix("p=") {
 							if split.is_empty() {
 								tracing::debug!("invalid syntax, priority cannot be empty");
-								return Err(());
+								return Err(BrawlCommandError::InvalidSyntax("priority cannot be empty".into()));
 							}
 
 							let Ok(p) = split.parse() else {
 								tracing::debug!("invalid syntax, priority must be a positive integer");
-								return Err(());
+								return Err(BrawlCommandError::InvalidSyntax("priority must be a positive integer".into()));
 							};
 
 							priority = Some(p);
@@ -165,20 +144,33 @@ impl FromStr for BrawlCommand {
 						priority,
 					}));
 				}
-				"try" => {
-					let commit_sha = splits
-						.next()
-						.and_then(|s| s.strip_prefix("commit="))
-						.map(|commit| commit.to_string());
+				"try" => match splits.next() {
+					Some("cancel") => return Ok(BrawlCommand::DryRun(DryRunCommand::Cancel)),
+					mut next => {
+						let mut head_sha = None;
+						let mut base_sha = None;
 
-					return Ok(BrawlCommand::DryRun(DryRunCommand {
-						head_sha: commit_sha,
-						base_sha: None,
-					}));
-				}
-				"cancel" => {
-					return Ok(BrawlCommand::Cancel);
-				}
+						while let Some(next_str) = next {
+							if let Some(head) = next_str
+								.strip_prefix("commit=")
+								.or_else(|| next_str.strip_prefix("c="))
+								.or_else(|| next_str.strip_prefix("head="))
+								.or_else(|| next_str.strip_prefix("h="))
+							{
+								head_sha = Some(head.to_string());
+							} else if let Some(base) = next_str.strip_prefix("base=").or_else(|| next_str.strip_prefix("b="))
+							{
+								base_sha = Some(base.to_string());
+							} else {
+								break;
+							}
+
+							next = splits.next();
+						}
+
+						return Ok(BrawlCommand::DryRun(DryRunCommand::New { head_sha, base_sha }));
+					}
+				},
 				"retry" => {
 					return Ok(BrawlCommand::Retry);
 				}
@@ -187,13 +179,13 @@ impl FromStr for BrawlCommand {
 				}
 				command => {
 					tracing::debug!("invalid command: {}", command);
-					return Err(());
+					return Err(BrawlCommandError::InvalidCommand(command.into()));
 				}
 			}
 		}
 
 		tracing::debug!("no command found");
 
-		Err(())
+		Err(BrawlCommandError::NoCommand)
 	}
 }
