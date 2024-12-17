@@ -9,8 +9,8 @@ on:
       - '**/Cargo.lock'
       - 'deny.toml'
     branches:
-      - '*'
-      - '!automation/brawl/temp/*'
+      - '!automation/**'
+      - '**'
   schedule:
     - cron: '0 0 * * *'
 
