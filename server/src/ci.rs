@@ -88,11 +88,16 @@ pub struct InsertCiRun<'a> {
 	pub priority: i32,
 	pub requested_by_id: i64,
 	pub is_dry_run: bool,
-	pub approved_by_ids: Vec<i64>,
 }
 
 impl<'a> InsertCiRun<'a> {
-	pub async fn insert(self, conn: &mut AsyncPgConnection, client: &Arc<InstallationClient>, config: &GitHubBrawlRepoConfig, reviewers: &[String]) -> anyhow::Result<i32> {
+	pub async fn insert(
+		self,
+		conn: &mut AsyncPgConnection,
+		client: &Arc<InstallationClient>,
+		config: &GitHubBrawlRepoConfig,
+		pr: &Pr<'_>,
+	) -> anyhow::Result<i32> {
 		let run_id = diesel::insert_into(crate::schema::github_ci_runs::dsl::github_ci_runs)
 			.values(&self)
 			.returning(crate::schema::github_ci_runs::id)
@@ -101,12 +106,20 @@ impl<'a> InsertCiRun<'a> {
 			.context("insert")?;
 
 		if self.is_dry_run {
-			start_ci_run(conn, run_id, client, config).await?;
+			start_ci_run(conn, run_id, client, config, pr).await?;
 		} else {
-			let repo_client = client.get_repository(RepositoryId(self.github_repo_id as u64)).context("get repository")?;
+			let repo_client = client
+				.get_repository(RepositoryId(self.github_repo_id as u64))
+				.context("get repository")?;
 
 			let repo = repo_client.get()?;
 			let repo_owner = repo.owner.context("repo owner")?;
+
+			let mut reviewers = Vec::new();
+			for id in &pr.reviewer_ids {
+				let user = client.get_user(UserId(*id as u64)).await?;
+				reviewers.push(user.login);
+			}
 
 			repo_client
 				.send_message(
@@ -145,15 +158,25 @@ pub struct CiRun {
 }
 
 impl CiRun {
-	pub async fn start(&self, conn: &mut AsyncPgConnection, client: &Arc<InstallationClient>, config: &GitHubBrawlRepoConfig) -> anyhow::Result<bool> {
-		start_ci_run(conn, self.id, client, config).await
+	pub async fn start(
+		&self,
+		conn: &mut AsyncPgConnection,
+		client: &Arc<InstallationClient>,
+		config: &GitHubBrawlRepoConfig,
+		pr: &Pr<'_>,
+	) -> anyhow::Result<bool> {
+		start_ci_run(conn, self.id, client, config, pr).await
 	}
 
 	pub async fn cancel(&self, conn: &mut AsyncPgConnection, client: &Arc<InstallationClient>) -> anyhow::Result<()> {
 		cancel_ci_run(conn, self.id, client).await
 	}
 
-	pub async fn get_active(conn: &mut AsyncPgConnection, repo_id: RepositoryId, pr_number: i64) -> anyhow::Result<Option<Self>> {
+	pub async fn get_active(
+		conn: &mut AsyncPgConnection,
+		repo_id: RepositoryId,
+		pr_number: i64,
+	) -> anyhow::Result<Option<Self>> {
 		crate::schema::github_ci_runs::dsl::github_ci_runs
 			.select(CiRun::as_select())
 			.filter(
@@ -168,10 +191,18 @@ impl CiRun {
 			.context("select")
 	}
 
-	pub async fn get_latest(conn: &mut AsyncPgConnection, repo_id: RepositoryId, pr_number: i64) -> anyhow::Result<Option<Self>> {
+	pub async fn get_latest(
+		conn: &mut AsyncPgConnection,
+		repo_id: RepositoryId,
+		pr_number: i64,
+	) -> anyhow::Result<Option<Self>> {
 		crate::schema::github_ci_runs::dsl::github_ci_runs
 			.select(CiRun::as_select())
-			.filter(crate::schema::github_ci_runs::github_repo_id.eq(repo_id.0 as i64).and(crate::schema::github_ci_runs::github_pr_number.eq(pr_number as i32)))
+			.filter(
+				crate::schema::github_ci_runs::github_repo_id
+					.eq(repo_id.0 as i64)
+					.and(crate::schema::github_ci_runs::github_pr_number.eq(pr_number as i32)),
+			)
 			.order(crate::schema::github_ci_runs::created_at.desc())
 			.limit(1)
 			.get_result::<CiRun>(conn)
@@ -186,6 +217,7 @@ pub async fn start_ci_run(
 	run_id: i32,
 	client: &Arc<InstallationClient>,
 	config: &GitHubBrawlRepoConfig,
+	pr: &Pr<'_>,
 ) -> anyhow::Result<bool> {
 	#[derive(Queryable, Selectable)]
 	#[diesel(table_name = crate::schema::github_ci_runs)]
@@ -252,16 +284,6 @@ pub async fn start_ci_run(
 			}
 		}
 		None => anyhow::bail!("invalid base"),
-	};
-
-	let Some(pr) = Pr::fetch(
-		conn,
-		RepositoryId(ci_run.github_repo_id as u64),
-		ci_run.github_pr_number as i64,
-	)
-	.await?
-	else {
-		anyhow::bail!("pr not found");
 	};
 
 	let mut reviewers = Vec::new();

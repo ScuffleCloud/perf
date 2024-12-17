@@ -7,22 +7,25 @@ use diesel_async::AsyncPgConnection;
 use dry_run::DryRunCommand;
 use octocrab::models::pulls::PullRequest;
 use octocrab::models::{Author, RepositoryId, UserId, UserProfile};
-use pr::PullRequestCommand;
-use review::{ReviewAction, ReviewCommand};
+use review::ReviewCommand;
 
 use crate::github::config::GitHubBrawlRepoConfig;
 use crate::github::installation::InstallationClient;
 
-pub mod dry_run;
-pub mod ping;
-pub mod pr;
-pub mod retry;
-pub mod review;
+mod cancel;
+mod dry_run;
+mod ping;
+mod pr;
+mod retry;
+mod review;
+
+pub use pr::PullRequestCommand;
 
 pub enum BrawlCommand {
 	DryRun(DryRunCommand),
 	Review(ReviewCommand),
 	Retry,
+	Cancel,
 	Ping,
 	PullRequest(PullRequestCommand),
 }
@@ -73,6 +76,7 @@ impl BrawlCommand {
 			BrawlCommand::DryRun(command) => dry_run::handle(client, &mut conn, context, command).await,
 			BrawlCommand::Review(command) => review::handle(client, &mut conn, context, command).await,
 			BrawlCommand::Retry => retry::handle(client, &mut conn, context).await,
+			BrawlCommand::Cancel => cancel::handle(client, &mut conn, context).await,
 			BrawlCommand::Ping => ping::handle(client, &mut conn, context).await,
 			BrawlCommand::PullRequest(command) => pr::handle(client, &mut conn, context, command).await,
 		}
@@ -138,44 +142,30 @@ impl FromStr for BrawlCommand {
 					}
 				}
 
-				let action = match command {
-					"r+" => ReviewAction::Approve,
-					"r-" => ReviewAction::Unapprove,
-					_ => unreachable!(),
-				};
-
-				Ok(BrawlCommand::Review(ReviewCommand {
-					action,
-					reviewers,
-					priority,
-				}))
+				Ok(BrawlCommand::Review(ReviewCommand { reviewers, priority }))
 			}
-			"try" => match splits.next() {
-				Some("cancel") => Ok(BrawlCommand::DryRun(DryRunCommand::Cancel)),
-				mut next => {
-					let mut head_sha = None;
-					let mut base_sha = None;
+			"cancel" => Ok(BrawlCommand::Cancel),
+			"try" => {
+				let mut head_sha = None;
+				let mut base_sha = None;
 
-					while let Some(next_str) = next {
-						if let Some(head) = next_str
-							.strip_prefix("commit=")
-							.or_else(|| next_str.strip_prefix("c="))
-							.or_else(|| next_str.strip_prefix("head="))
-							.or_else(|| next_str.strip_prefix("h="))
-						{
-							head_sha = Some(head.to_string());
-						} else if let Some(base) = next_str.strip_prefix("base=").or_else(|| next_str.strip_prefix("b=")) {
-							base_sha = Some(base.to_string());
-						} else {
-							break;
-						}
-
-						next = splits.next();
+				while let Some(next_str) = splits.next() {
+					if let Some(head) = next_str
+						.strip_prefix("commit=")
+						.or_else(|| next_str.strip_prefix("c="))
+						.or_else(|| next_str.strip_prefix("head="))
+						.or_else(|| next_str.strip_prefix("h="))
+					{
+						head_sha = Some(head.to_string());
+					} else if let Some(base) = next_str.strip_prefix("base=").or_else(|| next_str.strip_prefix("b=")) {
+						base_sha = Some(base.to_string());
+					} else {
+						break;
 					}
-
-					Ok(BrawlCommand::DryRun(DryRunCommand::New { head_sha, base_sha }))
 				}
-			},
+
+				Ok(BrawlCommand::DryRun(DryRunCommand { head_sha, base_sha }))
+			}
 			"retry" => Ok(BrawlCommand::Retry),
 			"ping" => Ok(BrawlCommand::Ping),
 			command => {

@@ -102,8 +102,6 @@ CREATE TABLE github_ci_runs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- The time the CI run was last updated
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    -- The ID of the user who approved the CI run
-    approved_by_ids BIGINT[] NOT NULL CHECK (array_length(approved_by_ids, 1) <= 10 AND array_position(approved_by_ids, NULL) IS NULL),
 
     FOREIGN KEY (github_repo_id, github_pr_number) REFERENCES github_pr(github_repo_id, github_pr_number) ON DELETE CASCADE
 );

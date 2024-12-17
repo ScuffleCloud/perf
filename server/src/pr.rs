@@ -132,7 +132,7 @@ pub struct UpdatePr<'a> {
 }
 
 impl<'a> UpdatePr<'a> {
-	pub fn new(pr: &'a PullRequest, current: &Pr<'_>) -> Self {
+	pub fn new(pr: &'a PullRequest, current: &mut Pr<'a>) -> Self {
 		let mut update = Self {
 			github_repo_id: current.github_repo_id,
 			github_pr_number: current.github_pr_number,
@@ -152,22 +152,27 @@ impl<'a> UpdatePr<'a> {
 
 		if pr.title.as_deref().unwrap_or("") != current.title {
 			update.title = Some(Cow::Borrowed(pr.title.as_deref().unwrap_or("")));
+			current.title = Cow::Borrowed(pr.title.as_deref().unwrap_or(""));
 		}
 
 		if pr.body.as_deref().unwrap_or("") != current.body {
 			update.body = Some(Cow::Borrowed(pr.body.as_deref().unwrap_or("")));
+			current.body = Cow::Borrowed(pr.body.as_deref().unwrap_or(""));
 		}
 
 		if pr.base.ref_field != current.target_branch {
 			update.target_branch = Some(Cow::Borrowed(&pr.base.ref_field));
+			current.target_branch = Cow::Borrowed(&pr.base.ref_field);
 		}
 
 		if pr.head.sha != current.latest_commit_sha {
 			update.latest_commit_sha = Some(Cow::Borrowed(&pr.head.sha));
+			current.latest_commit_sha = Cow::Borrowed(&pr.head.sha);
 		}
 
 		if pr.merge_commit_sha.as_deref() != current.merge_commit_sha.as_deref() {
 			update.merge_commit_sha = pr.merge_commit_sha.as_deref().map(Cow::Borrowed);
+			current.merge_commit_sha = pr.merge_commit_sha.as_deref().map(Cow::Borrowed);
 		}
 
 		let desired_status = match pr.mergeable_state {
@@ -187,6 +192,7 @@ impl<'a> UpdatePr<'a> {
 			&& (desired_status != GithubPrMergeStatus::Ready || current.latest_commit_sha != pr.head.sha)
 		{
 			update.merge_status = Some(desired_status);
+			current.merge_status = desired_status;
 		}
 
 		let mut assigned_ids = pr
@@ -198,7 +204,8 @@ impl<'a> UpdatePr<'a> {
 		assigned_ids.sort();
 
 		if assigned_ids != current.assigned_ids {
-			update.assigned_ids = Some(assigned_ids);
+			update.assigned_ids = Some(assigned_ids.clone());
+			current.assigned_ids = assigned_ids;
 		}
 
 		update

@@ -2,13 +2,15 @@ mod? local
 
 set shell := ["/bin/bash", "-euo", "pipefail", "-uc"]
 
-# An alias for cargo +nightly fmt --all
+# Runs cargo fmt
 fmt *args:
     cargo +nightly fmt --all {{args}}
 
+# Runs cargo clippy
 lint *args:
     cargo +nightly clippy --fix --allow-dirty --all-targets --all-features --allow-staged {{args}}
 
+# Runs cargo test
 test *args:
     #!/bin/bash
     set -euo pipefail
@@ -23,26 +25,31 @@ test *args:
     cargo +nightly llvm-cov report --html
     cargo +nightly llvm-cov report --lcov --output-path ./lcov.info
 
+# Runs cargo deny
 deny *args:
     cargo deny {{args}} --all-features check
 
+# Update the workspace dependencies
 workspace-hack:
     cargo hakari manage-deps
     cargo hakari generate
 
+# Generate the schema file
 diesel-generate: _diesel-generate-unpatched
-	# Generate the schema file
 	touch migrations/schema.patch
 	cp migrations/schema.unpatched.rs server/src/schema.rs
 	just diesel-apply
 
+# Generate the patch file
 diesel-patch: _diesel-generate-unpatched
 	[ -s server/src/schema.rs ] || cp migrations/schema.unpatched.rs server/src/schema.rs
 	diff -U6 migrations/schema.unpatched.rs server/src/schema.rs > migrations/schema.patch || true
 
+# Apply the patch file to the schema file
 diesel-apply:
 	[ ! -s migrations/schema.patch ] || patch -p0 -o server/src/schema.rs --merge < migrations/schema.patch
 
+# Check if the generated schema is up-to-date
 diesel-check:
 	@ \
 		check=$(just _diesel-generate-unpatched-helper 2> /dev/null) && \

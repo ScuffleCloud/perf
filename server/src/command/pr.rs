@@ -30,10 +30,10 @@ pub async fn handle(
 
 	conn.transaction(|conn| {
 		Box::pin(async move {
-			let current = Pr::fetch_or_create(context.repo_id, &context.pr, conn).await?;
+			let mut current = Pr::fetch_or_create(context.repo_id, &context.pr, conn).await?;
 
 			// Try figure out what changed
-			UpdatePr::new(&context.pr, &current).do_update(conn).await?;
+			UpdatePr::new(&context.pr, &mut current).do_update(conn).await?;
 
 			if context.pr.merged_at.is_none() {
 				// We need to cancel the checks on the current run somehow...

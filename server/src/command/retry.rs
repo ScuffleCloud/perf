@@ -4,7 +4,7 @@ use anyhow::Context;
 use diesel_async::AsyncPgConnection;
 
 use super::BrawlCommandContext;
-use crate::ci::{start_ci_run, CiRun, InsertCiRun};
+use crate::ci::{CiRun, InsertCiRun};
 use crate::github::installation::InstallationClient;
 use crate::pr::{Pr, UpdatePr};
 
@@ -19,8 +19,8 @@ pub async fn handle(
 
 	let repo_client = client.get_repository(context.repo_id).context("get repository")?;
 
-	let pr = Pr::fetch_or_create(context.repo_id, &context.pr, conn).await?;
-	UpdatePr::new(&context.pr, &pr).do_update(conn).await?;
+	let mut pr = Pr::fetch_or_create(context.repo_id, &context.pr, conn).await?;
+	UpdatePr::new(&context.pr, &mut pr).do_update(conn).await?;
 
 	let Some(run) = CiRun::get_latest(conn, context.repo_id, context.pr.number as i64).await? else {
 		repo_client
@@ -52,7 +52,7 @@ pub async fn handle(
 		return Ok(());
 	}
 
-	let new_run_id = InsertCiRun {
+	InsertCiRun {
 		github_repo_id: context.repo_id.0 as i64,
 		github_pr_number: context.issue_number as i32,
 		base_ref: &run.base_ref,
@@ -63,7 +63,7 @@ pub async fn handle(
 		requested_by_id: context.user.id.0 as i64,
 		is_dry_run: run.is_dry_run,
 	}
-	.insert(conn, client, &context.config, &[])
+	.insert(conn, client, &context.config, &pr)
 	.await?;
 
 	Ok(())

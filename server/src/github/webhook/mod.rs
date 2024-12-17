@@ -19,8 +19,7 @@ use serde::Serialize;
 use sha2::Sha256;
 
 use super::GitHubService;
-use crate::command::pr::PullRequestCommand;
-use crate::command::{BrawlCommand, BrawlCommandContext};
+use crate::command::{BrawlCommand, BrawlCommandContext, PullRequestCommand};
 
 pub trait WebhookConfig: Send + Sync + 'static {
 	fn webhook_secret(&self) -> &str;
@@ -355,6 +354,9 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
 					},
 				)
 				.await?;
+		}
+		WebhookEventPayload::CheckRun(check_run_event) => {
+			dbg!(&check_run_event);
 		}
 		_ => {}
 	}
