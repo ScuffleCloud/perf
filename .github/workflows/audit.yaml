@@ -2,15 +2,16 @@ name: Security audit
 on:
   push:
     branches-ignore:
+<<<<<<< HEAD
       - 'automation/**'
+=======
+      - 'automation/brawl/temp/*'
+>>>>>>> 685dabf (ignore tmp branch)
     paths:
       - '.github/workflows/audit.yaml'
       - '**/Cargo.toml'
       - '**/Cargo.lock'
       - 'deny.toml'
-    branches:
-      - '!automation/**'
-      - '**'
   schedule:
     - cron: '0 0 * * *'
 
