@@ -37,7 +37,7 @@ workspace-hack:
 # Generate the schema file
 diesel-generate: _diesel-generate-unpatched
 	touch migrations/schema.patch
-	cp migrations/schema.unpatched.rs server/src/schema.rs
+	cp migrations/schema.unpatched.rs server/src/schema/mod.rs
 	just diesel-apply
 
 # Generate the patch file
