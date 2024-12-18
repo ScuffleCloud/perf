@@ -45,8 +45,7 @@ macro_rules! impl_enum {
 
 impl_enum!(GithubCiRunStatus, crate::schema::sql_types::GithubCiRunStatus, {
 	Queued => b"queued",
-	Pending => b"pending",
-	Running => b"running",
+	InProgress => b"in_progress",
 	Success => b"success",
 	Failure => b"failure",
 	Cancelled => b"cancelled",
@@ -65,4 +64,11 @@ impl_enum!(GithubPrMergeStatus, crate::schema::sql_types::GithubPrMergeStatus, {
 	Conflict => b"conflict",
 	CheckFailure => b"check_failure",
 	MergeFailure => b"merge_failure",
+});
+
+impl_enum!(GithubCiRunStatusCheckStatus, crate::schema::sql_types::GithubCiRunStatusCheckStatus, {
+	Pending => b"pending",
+	Success => b"success",
+	Failure => b"failure",
+	Skipped => b"skipped",
 });

@@ -149,7 +149,7 @@ impl FromStr for BrawlCommand {
 				let mut head_sha = None;
 				let mut base_sha = None;
 
-				while let Some(next_str) = splits.next() {
+				for next_str in splits {
 					if let Some(head) = next_str
 						.strip_prefix("commit=")
 						.or_else(|| next_str.strip_prefix("c="))

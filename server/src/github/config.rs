@@ -27,6 +27,18 @@ pub struct GitHubBrawlRepoConfig {
 	/// The permissions required to merge a PR (default: ["role:write"])
 	#[default(vec![Permission::Role(Role::Push)])]
 	pub merge_permissions: Vec<Permission>,
+	/// The status checks required to merge a PR (default: ["brawl-done"])
+	///
+	/// If brawl will wait for all of these status checks to be successful
+	/// before merging. If not provided the PR will be merged instantly.
+	#[default(vec![
+		"brawl-done".to_string()
+	])]
+	pub required_status_checks: Vec<String>,
+	/// The number of minutes to wait before declaring the merge failed if the
+	/// required status checks are not met.
+	#[default(60)]
+	pub timeout_minutes: i32,
 	/// The permissions required to try a commit (default: <same as merge
 	/// permissions>)
 	#[default(None)]

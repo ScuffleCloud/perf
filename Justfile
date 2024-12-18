@@ -42,25 +42,25 @@ diesel-generate: _diesel-generate-unpatched
 
 # Generate the patch file
 diesel-patch: _diesel-generate-unpatched
-	[ -s server/src/schema.rs ] || cp migrations/schema.unpatched.rs server/src/schema.rs
-	diff -U6 migrations/schema.unpatched.rs server/src/schema.rs > migrations/schema.patch || true
+	[ -s server/src/schema/mod.rs ] || cp migrations/schema.unpatched.rs server/src/schema/mod.rs
+	diff -U6 migrations/schema.unpatched.rs server/src/schema/mod.rs > migrations/schema.patch || true
 
 # Apply the patch file to the schema file
 diesel-apply:
-	[ ! -s migrations/schema.patch ] || patch -p0 -o server/src/schema.rs --merge < migrations/schema.patch
+	[ ! -s migrations/schema.patch ] || patch -p0 -o server/src/schema/mod.rs --merge < migrations/schema.patch
 
 # Check if the generated schema is up-to-date
 diesel-check:
 	@ \
 		check=$(just _diesel-generate-unpatched-helper 2> /dev/null) && \
 		diff -q <(echo "$check") migrations/schema.unpatched.rs > /dev/null || ( \
-			echo "The generated schema differs from server/src/schema.rs. Run 'just diesel-generate'."; \
+			echo "The generated schema differs from server/src/schema/mod.rs. Run 'just diesel-generate'."; \
 			exit 1; \
 		)
 
 	@ \
 		regex='s/^\(\(\+\+\+\|\-\-\-\)[^\t]*\)\t.*$/\1\t<timestamp>/' && \
-		check=$(diff -U6 migrations/schema.unpatched.rs server/src/schema.rs | sed "$regex" || echo '') && \
+		check=$(diff -U6 migrations/schema.unpatched.rs server/src/schema/mod.rs | sed "$regex" || echo '') && \
 		patch=$(sed "$regex" ./migrations/schema.patch) && \
 		diff -q <(echo "$check") <(echo "$patch") > /dev/null || ( \
 			echo "The patch file differs from what would be generated. Run 'just diesel-patch'."; \

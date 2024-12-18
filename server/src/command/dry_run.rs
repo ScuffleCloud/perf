@@ -4,10 +4,10 @@ use anyhow::Context;
 use diesel_async::{AsyncConnection, AsyncPgConnection};
 
 use super::BrawlCommandContext;
-use crate::ci::{Base, CiRun, Head, InsertCiRun};
 use crate::github::installation::InstallationClient;
-use crate::pr::{Pr, UpdatePr};
-use crate::schema_enums::GithubCiRunStatus;
+use crate::schema::ci::{Base, CiRun, Head, InsertCiRun};
+use crate::schema::enums::GithubCiRunStatus;
+use crate::schema::pr::{Pr, UpdatePr};
 
 #[derive(Debug)]
 pub struct DryRunCommand {
@@ -90,7 +90,7 @@ pub async fn handle(
 								"🚨 This PR already has a active merge {}",
 								match run.status {
 									GithubCiRunStatus::Queued => "queued",
-									GithubCiRunStatus::Pending | GithubCiRunStatus::Running => "in progress",
+									GithubCiRunStatus::InProgress => "in progress",
 									status => anyhow::bail!("impossible CI status: {:?}", status),
 								}
 							),

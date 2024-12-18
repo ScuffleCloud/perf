@@ -18,6 +18,8 @@ use scuffle_http::backend::HttpServer;
 use serde::Serialize;
 use sha2::Sha256;
 
+pub mod check_event;
+
 use super::GitHubService;
 use crate::command::{BrawlCommand, BrawlCommandContext, PullRequestCommand};
 
@@ -361,11 +363,13 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
 				)
 				.await?;
 		}
-		WebhookEventPayload::CheckSuite(check_suite_event) => {
-			dbg!(&check_suite_event);
-		}
 		WebhookEventPayload::CheckRun(check_run_event) => {
-			dbg!(&check_run_event);
+			let repo = event.repository.context("missing repository")?;
+			let config = client.get_repo_config(repo.id).await?;
+
+			check_event::handle(&client, global.database_pool(), repo.id, &config, check_run_event.check_run)
+				.await
+				.context("handle_check_event")?;
 		}
 		_ => {}
 	}

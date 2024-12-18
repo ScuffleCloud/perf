@@ -60,15 +60,13 @@ CREATE TABLE github_pr (
 
 
 CREATE TYPE github_ci_run_status AS ENUM (
-    -- We havent started the run yet.
+    -- Currently queued.
     'queued',
-    -- We have started the run but github has not yet started the CI run.
-    'pending',
-    -- We have started the run and github has started the CI run.
-    'running',
-    -- The CI run completed successfully.
+    -- Currently in progress.
+    'in_progress',
+    -- Completed successfully.
     'success',
-    -- The CI run failed.
+    -- Completed with a failure.
     'failure',
     -- The CI run was cancelled.
     'cancelled'
@@ -106,9 +104,35 @@ CREATE TABLE github_ci_runs (
     FOREIGN KEY (github_repo_id, github_pr_number) REFERENCES github_pr(github_repo_id, github_pr_number) ON DELETE CASCADE
 );
 
+CREATE TYPE github_ci_run_status_check_status AS ENUM (
+    -- The status check is still running.
+    'pending',
+    -- The status check passed.
+    'success',
+    -- The status check failed.
+    'failure',
+    -- The status check was skipped.
+    'skipped'
+);
+
+CREATE TABLE github_ci_run_status_checks (
+    id BIGINT PRIMARY KEY,
+    github_ci_run_id INT NOT NULL,
+    status_check_name TEXT NOT NULL,
+    status_check_status github_ci_run_status_check_status NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL,
+    completed_at TIMESTAMPTZ,
+    url TEXT NOT NULL,
+    required BOOLEAN NOT NULL,
+    FOREIGN KEY (github_ci_run_id) REFERENCES github_ci_runs(id) ON DELETE CASCADE
+);
+
 -- This index enforces the concurrency group constraint, ensuring that only one CI run
 -- can be running at a time on a given repository concurrency group.
 CREATE UNIQUE INDEX github_ci_runs_ci_branch_idx ON github_ci_runs (github_repo_id, ci_branch) WHERE status = 'pending' OR status = 'running';
 
 -- This index ensures that only one CI run can be running at a time for a given PR.
 CREATE UNIQUE INDEX github_ci_runs_pr_idx ON github_ci_runs (github_repo_id, github_pr_number) WHERE completed_at IS NULL;
+
+-- This index ensures that we can quickly find a CI run by its commit SHA.
+CREATE INDEX github_ci_runs_run_commit_sha_idx ON github_ci_runs (run_commit_sha);

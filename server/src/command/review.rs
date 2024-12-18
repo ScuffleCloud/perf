@@ -4,9 +4,9 @@ use anyhow::Context;
 use diesel_async::AsyncPgConnection;
 
 use super::BrawlCommandContext;
-use crate::ci::{Base, CiRun, Head, InsertCiRun};
 use crate::github::installation::InstallationClient;
-use crate::pr::{Pr, UpdatePr};
+use crate::schema::ci::{Base, CiRun, Head, InsertCiRun};
+use crate::schema::pr::{Pr, UpdatePr};
 
 #[derive(Debug)]
 pub struct ReviewCommand {
@@ -75,7 +75,7 @@ pub async fn handle(
 		github_repo_id: context.repo_id.0 as i64,
 		github_pr_number: context.issue_number as i32,
 		base_ref: &Base::from_pr(&context.pr).to_string(),
-		head_commit_sha: &Head::from_pr(&context.pr).sha(),
+		head_commit_sha: Head::from_pr(&context.pr).sha(),
 		run_commit_sha: None,
 		ci_branch: &context.config.temp_branch_prefix,
 		priority: command.priority.unwrap_or(current.default_priority.unwrap_or(5)),

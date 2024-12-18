@@ -8,7 +8,7 @@ use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use octocrab::models::pulls::{MergeableState, PullRequest};
 use octocrab::models::{IssueState, RepositoryId};
 
-use crate::schema_enums::{GithubPrMergeStatus, GithubPrStatus};
+use crate::schema::enums::{GithubPrMergeStatus, GithubPrStatus};
 
 #[derive(Insertable, Selectable, Queryable)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -68,7 +68,7 @@ impl<'a> Pr<'a> {
 				_ => GithubPrStatus::Open,
 			},
 			default_priority: None,
-			merge_commit_sha: pr.merge_commit_sha.as_deref().map(Cow::Borrowed),
+			merge_commit_sha: pr.merged_at.and_then(|_| pr.merge_commit_sha.as_deref().map(Cow::Borrowed)),
 			target_branch: Cow::Borrowed(&pr.base.ref_field),
 			source_branch: Cow::Borrowed(&pr.head.ref_field),
 			latest_commit_sha: Cow::Borrowed(&pr.head.sha),
@@ -170,7 +170,7 @@ impl<'a> UpdatePr<'a> {
 			current.latest_commit_sha = Cow::Borrowed(&pr.head.sha);
 		}
 
-		if pr.merge_commit_sha.as_deref() != current.merge_commit_sha.as_deref() {
+		if pr.merged_at.is_some() && pr.merge_commit_sha.as_deref() != current.merge_commit_sha.as_deref() {
 			update.merge_commit_sha = pr.merge_commit_sha.as_deref().map(Cow::Borrowed);
 			current.merge_commit_sha = pr.merge_commit_sha.as_deref().map(Cow::Borrowed);
 		}

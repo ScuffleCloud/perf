@@ -4,9 +4,9 @@ use anyhow::Context;
 use diesel_async::AsyncPgConnection;
 
 use super::BrawlCommandContext;
-use crate::ci::CiRun;
 use crate::github::installation::InstallationClient;
-use crate::pr::{Pr, UpdatePr};
+use crate::schema::ci::CiRun;
+use crate::schema::pr::{Pr, UpdatePr};
 
 pub async fn handle(
 	client: &Arc<InstallationClient>,

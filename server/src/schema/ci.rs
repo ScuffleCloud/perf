@@ -1,8 +1,10 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
 use axum::http;
+use chrono::Utc;
 use diesel::prelude::{Insertable, Queryable};
 use diesel::query_dsl::methods::{FilterDsl, LimitDsl, OrderDsl, SelectDsl};
 use diesel::{BoolExpressionMethods, ExpressionMethods, OptionalExtension, Selectable, SelectableHelper};
@@ -12,10 +14,11 @@ use octocrab::models::{RepositoryId, UserId};
 use octocrab::params::repos::Reference;
 use octocrab::GitHubError;
 
+use super::ci_checks::CiCheck;
 use crate::github::config::GitHubBrawlRepoConfig;
-use crate::github::installation::InstallationClient;
-use crate::pr::Pr;
-use crate::schema_enums::GithubCiRunStatus;
+use crate::github::installation::{InstallationClient, RepoClient};
+use crate::schema::enums::{GithubCiRunStatus, GithubCiRunStatusCheckStatus};
+use crate::schema::pr::Pr;
 use crate::utils::{commit_link, issue_link};
 
 #[derive(Debug, Clone)]
@@ -90,7 +93,7 @@ pub struct InsertCiRun<'a> {
 	pub is_dry_run: bool,
 }
 
-impl<'a> InsertCiRun<'a> {
+impl InsertCiRun<'_> {
 	pub async fn insert(
 		self,
 		conn: &mut AsyncPgConnection,
@@ -126,7 +129,7 @@ impl<'a> InsertCiRun<'a> {
 					self.github_pr_number as u64,
 					&format!(
 						"📌 Commit {} has been approved by `{reviewers}`, added to the merge queue.",
-						commit_link(&repo_owner.login, &repo.name, &self.head_commit_sha),
+						commit_link(&repo_owner.login, &repo.name, self.head_commit_sha),
 						reviewers = reviewers.join(", ")
 					),
 				)
@@ -172,6 +175,110 @@ impl CiRun {
 		cancel_ci_run(conn, self.id, client).await
 	}
 
+	pub async fn refresh(
+		&self,
+		conn: &mut AsyncPgConnection,
+		client: &Arc<InstallationClient>,
+		config: &GitHubBrawlRepoConfig,
+		pr: &Pr<'_>,
+	) -> anyhow::Result<()> {
+		if self.completed_at.is_some() {
+			return Ok(());
+		}
+
+		let repo_client = client
+			.get_repository(RepositoryId(self.github_repo_id as u64))
+			.context("get repository")?;
+
+		let Some(started_at) = self.started_at else {
+			return Ok(());
+		};
+
+		if config.required_status_checks.is_empty() {
+			// Then this is instantly successful.
+			return Ok(());
+		}
+
+		let checks = CiCheck::get_for_run(conn, self.id).await?;
+
+		let checks = checks
+			.iter()
+			.map(|c| (c.status_check_name.as_ref(), c))
+			.collect::<HashMap<_, _>>();
+
+		let mut success = true;
+		let mut required_checks = Vec::new();
+		let mut missing_checks = Vec::new();
+
+		for check in &config.required_status_checks {
+			let Some(check) = checks.get(check.as_str()).copied() else {
+				success = false;
+				missing_checks.push((check.as_str(), None));
+				continue;
+			};
+
+			if check.status_check_status == GithubCiRunStatusCheckStatus::Failure {
+				fail_run(
+					conn,
+					&repo_client,
+					self.id,
+					self.github_pr_number,
+					&format!(
+						"💔 Test failed - [{check}]({check_url})",
+						check = check.status_check_name,
+						check_url = check.url
+					),
+				)
+				.await?;
+				return Ok(());
+			} else if check.status_check_status != GithubCiRunStatusCheckStatus::Success {
+				success = false;
+				missing_checks.push((check.status_check_name.as_ref(), Some(check)));
+			}
+
+			required_checks.push(check);
+		}
+
+		if success {
+			success_run(conn, client, self, pr, required_checks.as_ref()).await?;
+		}
+
+		if Utc::now().signed_duration_since(started_at) > chrono::Duration::minutes(config.timeout_minutes as i64) {
+			fail_run(
+				conn,
+				&repo_client,
+				self.id,
+				self.github_pr_number,
+				&format!(
+					r#"💔 CI run timed out after {timeout} minutes
+
+<details>
+<summary>Missing checks</summary>
+
+{missing_checks}
+
+</details>
+"#,
+					timeout = config.timeout_minutes,
+					missing_checks = {
+						let mut missing_checks_string = String::new();
+						for (name, check) in missing_checks {
+							if let Some(check) = check {
+								missing_checks_string.push_str(&format!("- [{name}]({url}) (pending)\n", name = name, url = check.url));
+							} else {
+								missing_checks_string.push_str(&format!("- {name} (not started)\n", name = name));
+							}
+						}
+						missing_checks_string
+					},
+				),
+			)
+			.await?;
+		}
+
+		Ok(())
+	}
+
 	pub async fn get_active(
 		conn: &mut AsyncPgConnection,
 		repo_id: RepositoryId,
@@ -210,6 +317,143 @@ impl CiRun {
 			.optional()
 			.context("select")
 	}
+
+	pub async fn find_by_run_commit_sha(conn: &mut AsyncPgConnection, run_commit_sha: &str) -> anyhow::Result<Option<Self>> {
+		crate::schema::github_ci_runs::dsl::github_ci_runs
+			.select(CiRun::as_select())
+			.filter(crate::schema::github_ci_runs::run_commit_sha.eq(run_commit_sha))
+			.get_result::<CiRun>(conn)
+			.await
+			.optional()
+			.context("select")
+	}
+}
+
+async fn fail_run(
+	conn: &mut AsyncPgConnection,
+	repo_client: &RepoClient<'_>,
+	run_id: i32,
+	pr_number: i32,
+	message: &str,
+) -> anyhow::Result<()> {
+	diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
+		.filter(crate::schema::github_ci_runs::id.eq(run_id))
+		.set((
+			crate::schema::github_ci_runs::status.eq(GithubCiRunStatus::Failure),
+			crate::schema::github_ci_runs::completed_at.eq(chrono::Utc::now()),
+		))
+		.execute(conn)
+		.await
+		.context("update")?;
+
+	repo_client
+		.send_message(pr_number as u64, message)
+		.await
+		.context("send message")?;
+
+	Ok(())
+}
+
+async fn success_run(
+	conn: &mut AsyncPgConnection,
+	client: &Arc<InstallationClient>,
+	run: &CiRun,
+	pr: &Pr<'_>,
+	checks: &[&CiCheck<'_>],
+) -> anyhow::Result<()> {
+	diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
+		.filter(crate::schema::github_ci_runs::id.eq(run.id))
+		.set((
+			crate::schema::github_ci_runs::status.eq(GithubCiRunStatus::Success),
+			crate::schema::github_ci_runs::completed_at.eq(chrono::Utc::now()),
+		))
+		.execute(conn)
+		.await
+		.context("update")?;
+
+	let mut checks_message = String::new();
+	for check in checks {
+		checks_message.push_str(&format!(
+			"- [{name}]({url})\n",
+			name = check.status_check_name,
+			url = check.url
+		));
+	}
+
+	let Some(run_commit_sha) = run.run_commit_sha.as_ref() else {
+		anyhow::bail!("run commit sha is null");
+	};
+
+	let repo_client = client
+		.get_repository(RepositoryId(run.github_repo_id as u64))
+		.context("get repository")?;
+
+	let repo = repo_client.get()?;
+	let repo_owner = repo.owner.context("repo owner")?;
+
+	if run.is_dry_run {
+		repo_client
+			.send_message(
+				run.github_pr_number as u64,
+				format!(
+					"🎉 Try build successful!\n{checks_message}Build commit: {commit_link} (`{commit_sha}`)",
+					checks_message = checks_message,
+					commit_link = commit_link(&repo_owner.login, &repo.name, run_commit_sha),
+					commit_sha = run_commit_sha,
+				),
+			)
+			.await
+			.context("send message")?;
+	} else {
+		let mut reviewers = Vec::new();
+		for id in &pr.reviewer_ids {
+			let user = client.get_user(UserId(*id as u64)).await?;
+			reviewers.push(user.login);
+		}
+
+		repo_client
+			.send_message(
+				run.github_pr_number as u64,
+				format!(
+					"🎉 Build successful!\n{checks_message}Approved by: `{reviewers}`\nPushing {commit_link} to {branch}",
+					checks_message = checks_message,
+					reviewers = reviewers.join(", "),
+					commit_link = commit_link(&repo_owner.login, &repo.name, run_commit_sha),
+					branch = pr.target_branch,
+				),
+			)
+			.await
+			.context("send message")?;
+
+		match repo_client.push_branch(&pr.target_branch, run_commit_sha, false).await {
+			Ok(_) => {}
+			Err(e) => {
+				fail_run(
+					conn,
+					&repo_client,
+					run.id,
+					run.github_pr_number,
+					&format!(
+						r#"🚨 Tests passed but failed to push to {target_branch}
+<details>
+<summary>Error</summary>
+
+{error:#}
+
+</details>
+"#,
+						error = e,
+						target_branch = pr.target_branch,
+					),
+				)
+				.await?;
+
+				tracing::error!("failed to push branch {}: {:#}", pr.target_branch, e);
+			}
+		}
+	}
+
+	Ok(())
 }
 
 pub async fn start_ci_run(
@@ -237,7 +481,10 @@ pub async fn start_ci_run(
 				.eq(run_id)
 				.and(crate::schema::github_ci_runs::status.eq(GithubCiRunStatus::Queued)),
 		)
-		.set(crate::schema::github_ci_runs::status.eq(GithubCiRunStatus::Pending))
+		.set((
+			crate::schema::github_ci_runs::status.eq(GithubCiRunStatus::InProgress),
+			crate::schema::github_ci_runs::started_at.eq(chrono::Utc::now()),
+		))
 		.returning(UpdateResult::as_select())
 		.get_result::<UpdateResult>(conn)
 		.await
@@ -259,21 +506,14 @@ pub async fn start_ci_run(
 		Some(Base::Commit(sha)) => sha,
 		Some(Base::Branch(branch)) => {
 			let Some(branch) = repo_client.get_ref(&Reference::Branch(branch.to_string())).await? else {
-				diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
-					.filter(crate::schema::github_ci_runs::id.eq(run_id))
-					.set(crate::schema::github_ci_runs::status.eq(GithubCiRunStatus::Failure))
-					.execute(conn)
-					.await
-					.context("update")?;
-
-				repo_client
-					.send_message(
-						ci_run.github_pr_number as u64,
-						format!("🚨 Failed to find base branch `{branch}`"),
-					)
-					.await
-					.context("send message")?;
-
+				fail_run(
+					conn,
+					&repo_client,
+					run_id,
+					ci_run.github_pr_number,
+					&format!("🚨 Failed to find base branch `{branch}`"),
+				)
+				.await?;
 				return Ok(false);
 			};
 
@@ -317,7 +557,7 @@ pub async fn start_ci_run(
 	{
 		Ok(commit) => commit,
 		Err(e) => {
-			if let Some(octocrab::Error::GitHub {
+			let message = if let Some(octocrab::Error::GitHub {
 				source: GitHubError {
 					status_code: http::StatusCode::CONFLICT,
 					..
@@ -325,10 +565,8 @@ pub async fn start_ci_run(
 				..
 			}) = e.downcast_ref::<octocrab::Error>()
 			{
-				repo_client
-							.send_message(
-								ci_run.github_pr_number as u64,
-								format!(r#"🔒 Merge conflict
+				format!(
+					r#"🔒 Merge conflict
 This pull request and the `{target_branch}` branch have diverged in a way that cannot be automatically merged.
 Please rebase your branch ontop of the latest `{target_branch}` branch and let the reviewer approve again.
 
@@ -354,22 +592,14 @@ handled during merge and rebase. This is normal, and you should still perform st
 
 </details>
 "#,
-								head_sha = commit_link(&repo_owner.login, &repo.name, &ci_run.head_commit_sha),
-								base_sha = commit_link(&repo_owner.login, &repo.name, &base_sha),
-								source_branch = pr.source_branch,
-								target_branch = pr.target_branch,
-							))
-							.await
-							.context("send message")?;
-
-				return Ok(false);
-			}
-
-			repo_client
-				.send_message(
-					ci_run.github_pr_number as u64,
-					format!(
-						r#"🚨 Failed to start CI run
+					head_sha = commit_link(&repo_owner.login, &repo.name, &ci_run.head_commit_sha),
+					base_sha = commit_link(&repo_owner.login, &repo.name, &base_sha),
+					source_branch = pr.source_branch,
+					target_branch = pr.target_branch,
+				)
+			} else {
+				format!(
+					r#"🚨 Failed to start CI run
 <details>
 <summary>Error</summary>
 
@@ -377,20 +607,40 @@ handled during merge and rebase. This is normal, and you should still perform st
 
 </details>
 "#,
-						error = e
-					),
+					error = e
 				)
-				.await
-				.context("send message")?;
+			};
 
+			fail_run(conn, &repo_client, run_id, ci_run.github_pr_number, &message).await?;
 			return Ok(false);
 		}
 	};
 
-	repo_client
-		.push_branch(&ci_run.ci_branch, &commit.sha, true)
-		.await
-		.context("push branch")?;
+	match repo_client.push_branch(&ci_run.ci_branch, &commit.sha, true).await {
+		Ok(_) => {}
+		Err(e) => {
+			fail_run(
+				conn,
+				&repo_client,
+				run_id,
+				ci_run.github_pr_number,
+				&format!(
+					r#"🚨 Failed to start CI run
+<details>
+<summary>Error</summary>
+
+{error:#}
+
+</details>
+"#,
+					error = e
+				),
+			)
+			.await?;
+
+			return Ok(false);
+		}
+	}
 
 	diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
 		.filter(crate::schema::github_ci_runs::id.eq(run_id))
@@ -418,7 +668,7 @@ pub async fn cancel_ci_run(
 	run_id: i32,
 	client: &Arc<InstallationClient>,
 ) -> anyhow::Result<()> {
-	let response = diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
+	let Some((run_commit_sha, repo_id)) = diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
 		.filter(
 			crate::schema::github_ci_runs::id
 				.eq(run_id)
@@ -435,13 +685,18 @@ pub async fn cancel_ci_run(
 		.get_result::<(Option<String>, i64)>(conn)
 		.await
 		.optional()
-		.context("update")?;
+		.context("update")?
+	else {
+		return Ok(());
+	};
 
-	if let Some((Some(run_commit_sha), repo_id)) = response {
+	tracing::info!("cancelled ci run {run_id} for {repo_id}");
+
+	if let Some(run_commit_sha) = run_commit_sha {
 		// TODO: cancel all checks on this commit on GitHub
-		tracing::info!("cancelled ci run {run_id} for {repo_id} on {run_commit_sha}");
-		let _ = client;
 	}
+
+	let _ = client;
 
 	Ok(())
 }
