@@ -400,13 +400,41 @@ async fn success_run(
 	let repo = repo_client.get()?;
 	let repo_owner = repo.owner.context("repo owner")?;
 
+	let duration = {
+		let duration = run
+			.completed_at
+			.unwrap_or(chrono::Utc::now())
+			.signed_duration_since(run.started_at.unwrap_or(chrono::Utc::now()));
+
+		let seconds = duration.num_seconds() % 60;
+		let minutes = (duration.num_seconds() / 60) % 60;
+		let hours = duration.num_seconds() / 60 / 60;
+		let mut format_string = String::new();
+		if hours > 0 {
+			format_string.push_str(&format!("{hours:0>2}:"));
+			format_string.push_str(&format!("{minutes:0>2}:"));
+			format_string.push_str(&format!("{seconds:0>2}"));
+		} else if minutes > 0 {
+			format_string.push_str(&format!("{minutes:0>2}:"));
+			format_string.push_str(&format!("{seconds:0>2}"));
+		} else {
+			format_string.push_str(&format!("{seconds}s"));
+		}
+
+		format_string
+	};
+
 	if run.is_dry_run {
+		let requested_by = client.get_user(UserId(run.requested_by_id as u64)).await?;
+
 		repo_client
 			.send_message(
 				run.github_pr_number as u64,
 				format!(
-					"🎉 Try build successful!\n{checks_message}\nBuild commit: {commit_link} (`{commit_sha}`)",
+					"🎉 Try build successful!\nCompleted in {duration}\n{checks_message}\nRequested by: `{requested_by}`\nBuild commit: {commit_link} (`{commit_sha}`)",
+					duration = duration,
 					checks_message = checks_message,
+					requested_by = requested_by.login,
 					commit_link = commit_link(&repo_owner.login, &repo.name, run_commit_sha),
 					commit_sha = run_commit_sha,
 				),
@@ -425,29 +453,7 @@ async fn success_run(
 				run.github_pr_number as u64,
 				format!(
 					"🎉 Build successful!\nCompleted in {duration}\n{checks_message}\nApproved by: `{reviewers}`\nPushing {commit_link} to {branch}",
-					duration = {
-						let duration = run
-							.completed_at
-							.unwrap_or(chrono::Utc::now())
-							.signed_duration_since(run.started_at.unwrap_or(chrono::Utc::now()));
-
-						let seconds = duration.num_seconds() % 60;
-						let minutes = (duration.num_seconds() / 60) % 60;
-						let hours = duration.num_seconds() / 60 / 60;
-						let mut format_string = String::new();
-						if hours > 0 {
-							format_string.push_str(&format!("{hours:0>2}:"));
-							format_string.push_str(&format!("{minutes:0>2}:"));
-							format_string.push_str(&format!("{seconds:0>2}"));
-						} else if minutes > 0 {
-							format_string.push_str(&format!("{minutes:0>2}:"));
-							format_string.push_str(&format!("{seconds:0>2}"));
-						} else {
-							format_string.push_str(&format!("{seconds}s"));
-						}
-
-						format_string
-					},
+					duration = duration,
 					checks_message = checks_message,
 					reviewers = reviewers.join(", "),
 					commit_link = commit_link(&repo_owner.login, &repo.name, run_commit_sha),
@@ -761,9 +767,39 @@ pub async fn cancel_ci_run(
 		run_type = if ci_run.is_dry_run { "dry run" } else { "merge" }
 	);
 
-	// if let Some(run_commit_sha) = ci_run.run_commit_sha {
-	// 	// TODO: cancel all checks on this commit on GitHub
-	// }
+	if let Some(run_commit_sha) = ci_run.run_commit_sha {
+		let page = client.client()
+			.workflows(repo_owner.login.clone(), repo.name.clone())
+			.list_all_runs()
+			.branch(ci_run.ci_branch.clone())
+			.per_page(100)
+			.page(1u32)
+			.send()
+			.await?;
+
+		let mut total_workflows = page.items;
+
+		while let Some(page) = client.client().get_page(&page.next).await? {
+			total_workflows.extend(page.items);
+		}
+
+		for workflow in total_workflows.into_iter().filter(|w| w.head_sha == run_commit_sha) {
+			if workflow.conclusion.is_none() {
+				client.client().post::<_, ()>(
+					format!("/repos/{owner}/{repo}/actions/runs/{id}/cancel", owner = repo_owner.login, repo = repo.name, id = workflow.id),
+					None::<&()>
+				).await?;
+				tracing::info!(
+					run_id = %run_id,
+					repo_id = %ci_run.github_repo_id,
+					"cancelled workflow {id} on https://github.com/{owner}/{repo}/actions/runs/{id}",
+					owner = repo_owner.login,
+					repo = repo.name,
+					id = workflow.id
+				);
+			}
+		}
+	}
 
 	let _ = client;
 
