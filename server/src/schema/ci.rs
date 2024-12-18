@@ -367,7 +367,10 @@ async fn success_run(
 			name = check.status_check_name,
 			url = check.url,
 			duration = {
-				let duration = check.completed_at.unwrap_or(chrono::Utc::now()).signed_duration_since(check.started_at);
+				let duration = check
+					.completed_at
+					.unwrap_or(chrono::Utc::now())
+					.signed_duration_since(check.started_at);
 				let seconds = duration.num_seconds() % 60;
 				let minutes = (duration.num_seconds() / 60) % 60;
 				let hours = duration.num_seconds() / 60 / 60;
@@ -538,12 +541,20 @@ pub async fn start_ci_run(
 	let mut reviewed_by = Vec::new();
 	if ci_run.is_dry_run {
 		let user = client.get_user(UserId(ci_run.requested_by_id as u64)).await?;
-		reviewed_by.push(format!("Reviewed-by: {login} <{id}+{login}@users.noreply.github.com>", login = user.login, id = user.id));
+		reviewed_by.push(format!(
+			"Reviewed-by: {login} <{id}+{login}@users.noreply.github.com>",
+			login = user.login,
+			id = user.id
+		));
 		reviewers.push(user.login);
 	} else {
 		for id in &pr.reviewer_ids {
 			let user = client.get_user(UserId(*id as u64)).await?;
-			reviewed_by.push(format!("Reviewed-by: {login} <{id}+{login}@users.noreply.github.com>", login = user.login, id = user.id));
+			reviewed_by.push(format!(
+				"Reviewed-by: {login} <{id}+{login}@users.noreply.github.com>",
+				login = user.login,
+				id = user.id
+			));
 			reviewers.push(user.login);
 		}
 	}
