@@ -96,7 +96,7 @@ impl scuffle_bootstrap::Global for Global {
 			.await
 			.context("build database pool")?;
 
-		tracing::info!("database initialized.");
+		tracing::info!("database initialized");
 
 		let github_service = GitHubService::new(
 			config.github.app_id.into(),
