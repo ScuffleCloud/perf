@@ -1,6 +1,6 @@
 <div align="center">
-    <h1>Scuffle Perf</h1>
-    <h3>A continuous integration performance monitoring tool</h3>
+    <h1>Scuffle Brawl</h1>
+    <h3>A continuous integration performance monitoring tool heavily inspired by rustc-perf, bors & homu</h3>
 </div>
 
 <p align="center">
@@ -34,7 +34,7 @@
 
 Scuffle perf is a application designed for tracking the performance of continuous integration pipelines.
 
-Inspired by [rustc-perf](https://github.com/rust-lang/rustc-perf).
+Inspired by [rustc-perf](https://github.com/rust-lang/rustc-perf), [bors](https://github.com/rust-lang/bors), and [homu](https://github.com/rust-lang/homu).
 
 ---
 
@@ -79,7 +79,7 @@ Your security is our priority. 🔒 Refer to our [**Security Policy**](./.github
 
 ## 📋 Additional Resources
 
-- 🔍 [**Public Issue Tracker**](https://jira.atlassian.scuffle.cloud/browse/PERF)
+- 🔍 [**Public Issue Tracker**](https://jira.atlassian.scuffle.cloud/browse/BRWL)
 - 📊 [**Kanban Board**](https://scuffle.notion.site)
 - 📰 [**Scuffle Blog**](https://bytes.scuffle.cloud)
 

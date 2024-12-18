@@ -4,12 +4,14 @@ on:
   push:
     branches:
       - main
+      - automation/brawl/try/*
+      - automation/brawl/merge/*
 
   pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -102,7 +104,7 @@ jobs:
       # Note; we don't run the powerset here because it's very slow on CI
       # Perhaps we should consider it at some point.
       - name: Run tests
-        run: cargo +nightly llvm-cov nextest --branch --no-fail-fast --all-features --lcov --output-path ./lcov.info --profile ci
+        run: cargo +nightly llvm-cov nextest --no-fail-fast --all-features --lcov --output-path ./lcov.info --profile ci
 
       - uses: codecov/codecov-action@v5
         with:
@@ -117,3 +119,11 @@ jobs:
         with:
           files: ./target/nextest/ci/junit.xml
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  brawl-done:
+    runs-on: ubuntu-24.04
+    needs: [hakari, test, clippy, fmt]
+    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/heads/automation/brawl/merge/') || startsWith(github.ref, 'refs/heads/automation/brawl/try/')) }}
+    steps:
+      - name: calculate the correct exit status
+        run: jq --exit-status 'all(.result == "success" or .result == "skipped")' <<< '${{ toJson(needs) }}'

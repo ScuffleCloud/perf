@@ -16,3 +16,4 @@ path = "workspace-hack"
 
 [workspace.dependencies]
 scuffle-workspace-hack = { path = "workspace-hack" }
+migration = { path = "migration" }

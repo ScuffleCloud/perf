@@ -1,14 +1,18 @@
 [package]
-name = "scuffle-perf-server"
+name = "scuffle-brawl"
 version = "0.1.0"
 edition = "2021"
-repository = "https://github.com/scufflecloud/perf"
+repository = "https://github.com/scufflecloud/brawl"
 authors = ["Scuffle <opensource@scuffle.cloud>"]
 readme = "README.md"
-documentation = "https://docs.rs/scuffle-perf-server"
+documentation = "https://docs.rs/scuffle-brawl"
 license = "MIT OR Apache-2.0"
 description = "A continuous integration performance monitoring tool server"
 keywords = ["performance", "monitoring", "ci"]
+
+[[bin]]
+name = "scuffle-brawl"
+path = "src/bin/server.rs"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
@@ -16,14 +20,34 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
 [dependencies]
 scuffle-workspace-hack.workspace = true
 scuffle-bootstrap = "0.0.2"
-scuffle-settings = { version = "0.0.2", features = ["bootstrap"] }
+scuffle-settings = { version = "0.0.2", features = ["bootstrap", "toml", "templates"] }
 scuffle-context = "0.0.2"
 scuffle-signal = { version = "0.0.2", features = ["bootstrap"] }
 scuffle-metrics = { version = "0.0.4", features = ["prometheus"] }
 scuffle-bootstrap-telemetry = "0.0.3"
+scuffle-http = { version = "0.0.4", features = ["axum"] }
+axum = { version = "0.7.9", features = ["macros"] }
+
 tokio = { version = "1.42.0", features = ["full"] }
 smart-default = "0.7.1"
 serde = { version = "1.0.215", features = ["derive"] }
 anyhow = "1.0.85"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.1", features = ["env-filter"] }
+
+diesel = { version = "2.2.0", features = ["chrono", "large-tables"] }
+diesel-async = { version = "0.5.2", features = ["postgres", "bb8"] }
+futures = "0.3.31"
+chrono = "0.4.39"
+octocrab = { version = "0.42.1", features = ["stream"] }
+async-trait = "0.1"
+serde_json = "1.0.133"
+parking_lot = "0.12.3"
+jsonwebtoken = "9.3.0"
+moka = { version = "0.12.8", features = ["future"] }
+hex = "0.4.3"
+hmac = "0.12.1"
+sha2 = "0.10.6"
+toml = "0.8.19"
+thiserror = "2.0.6"
+uuid = "1.5.0"
