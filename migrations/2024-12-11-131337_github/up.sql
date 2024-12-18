@@ -112,7 +112,9 @@ CREATE TYPE github_ci_run_status_check_status AS ENUM (
     -- The status check failed.
     'failure',
     -- The status check was skipped.
-    'skipped'
+    'skipped',
+    -- The status check was cancelled.
+    'cancelled'
 );
 
 CREATE TABLE github_ci_run_status_checks (

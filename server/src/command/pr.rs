@@ -42,7 +42,7 @@ pub async fn handle(
 						run.cancel(conn, client).await?;
 						repo_client
 							.send_message(
-								context.issue_number,
+								run.github_pr_number as u64,
 								&format!(
 									"🚨 PR state was changed while merge was {}, cancelling merge.",
 									match run.status {

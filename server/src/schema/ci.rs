@@ -711,13 +711,12 @@ handled during merge and rebase. This is normal, and you should still perform st
 	tracing::info!(
 		run_id = %run_id,
 		repo_id = %ci_run.github_repo_id,
-		"started ci run on https://github.com/{owner}/{repo}/pull/{pr_number} (commit {run_sha}) ({run_type})",
-		owner = repo_owner.login,
-		repo = repo.name,
-		pr_number = ci_run.github_pr_number,
+		run_type = if ci_run.is_dry_run { "dry run" } else { "merge" },
 		run_sha = commit.sha,
-		run_type = if ci_run.is_dry_run { "dry run" } else { "merge" }
+		url = format!("https://github.com/{owner}/{repo}/pull/{pr_number}", owner = repo_owner.login, repo = repo.name, pr_number = ci_run.github_pr_number),
+		"started ci run",
 	);
+
 	Ok(true)
 }
 
@@ -755,20 +754,19 @@ pub async fn cancel_ci_run(
 	tracing::info!(
 		run_id = %run_id,
 		repo_id = %ci_run.github_repo_id,
-		"cancelled ci run on https://github.com/{owner}/{repo}/pull/{pr_number} (commit {run_sha}) ({run_type})",
-		owner = repo_owner.login,
-		repo = repo.name,
-		pr_number = ci_run.github_pr_number,
+		run_type = if ci_run.is_dry_run { "dry run" } else { "merge" },
 		run_sha = if let Some(run_commit_sha) = &ci_run.run_commit_sha {
 			run_commit_sha.as_str()
 		} else {
 			"<not started>"
 		},
-		run_type = if ci_run.is_dry_run { "dry run" } else { "merge" }
+		url = format!("https://github.com/{owner}/{repo}/pull/{pr_number}", owner = repo_owner.login, repo = repo.name, pr_number = ci_run.github_pr_number),
+		"cancelled ci run",
 	);
 
 	if let Some(run_commit_sha) = ci_run.run_commit_sha {
-		let page = client.client()
+		let page = client
+			.client()
 			.workflows(repo_owner.login.clone(), repo.name.clone())
 			.list_all_runs()
 			.branch(ci_run.ci_branch.clone())
@@ -785,10 +783,18 @@ pub async fn cancel_ci_run(
 
 		for workflow in total_workflows.into_iter().filter(|w| w.head_sha == run_commit_sha) {
 			if workflow.conclusion.is_none() {
-				client.client().post::<_, ()>(
-					format!("/repos/{owner}/{repo}/actions/runs/{id}/cancel", owner = repo_owner.login, repo = repo.name, id = workflow.id),
-					None::<&()>
-				).await?;
+				client
+					.client()
+					.post::<_, serde_json::Value>(
+						format!(
+							"/repos/{owner}/{repo}/actions/runs/{id}/cancel",
+							owner = repo_owner.login,
+							repo = repo.name,
+							id = workflow.id
+						),
+						None::<&()>,
+					)
+					.await?;
 				tracing::info!(
 					run_id = %run_id,
 					repo_id = %ci_run.github_repo_id,
