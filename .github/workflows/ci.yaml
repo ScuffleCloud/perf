@@ -3,7 +3,6 @@ name: ci
 on:
   push:
     branches:
-      - main
       - automation/brawl/try/*
       - automation/brawl/merge/*
 
