@@ -383,31 +383,9 @@ async fn success_run(
 	let mut checks_message = String::new();
 	for check in checks {
 		checks_message.push_str(&format!(
-			"- [{name}]({url}) (in {duration}) \n",
+			"- [{name}]({url})\n",
 			name = check.status_check_name,
 			url = check.url,
-			duration = {
-				let duration = check
-					.completed_at
-					.unwrap_or(chrono::Utc::now())
-					.signed_duration_since(check.started_at);
-				let seconds = duration.num_seconds() % 60;
-				let minutes = (duration.num_seconds() / 60) % 60;
-				let hours = duration.num_seconds() / 60 / 60;
-				let mut format_string = String::new();
-				if hours > 0 {
-					format_string.push_str(&format!("{:0>2}:", hours));
-					format_string.push_str(&format!("{:0>2}:", minutes));
-					format_string.push_str(&format!("{:0>2}", seconds));
-				} else if minutes > 0 {
-					format_string.push_str(&format!("{:0>2}:", minutes));
-					format_string.push_str(&format!("{:0>2}", seconds));
-				} else {
-					format_string.push_str(&format!("{:0>2}s", seconds));
-				}
-
-				format_string
-			},
 		));
 	}
 
@@ -446,7 +424,30 @@ async fn success_run(
 			.send_message(
 				run.github_pr_number as u64,
 				format!(
-					"🎉 Build successful!\n{checks_message}Approved by: `{reviewers}`\nPushing {commit_link} to {branch}",
+					"🎉 Build successful!\nCompleted in {duration}\n{checks_message}\nApproved by: `{reviewers}`\nPushing {commit_link} to {branch}",
+					duration = {
+						let duration = run
+							.completed_at
+							.unwrap_or(chrono::Utc::now())
+							.signed_duration_since(run.started_at.unwrap_or(chrono::Utc::now()));
+
+						let seconds = duration.num_seconds() % 60;
+						let minutes = (duration.num_seconds() / 60) % 60;
+						let hours = duration.num_seconds() / 60 / 60;
+						let mut format_string = String::new();
+						if hours > 0 {
+							format_string.push_str(&format!("{hours:0>2}:"));
+							format_string.push_str(&format!("{minutes:0>2}:"));
+							format_string.push_str(&format!("{seconds:0>2}"));
+						} else if minutes > 0 {
+							format_string.push_str(&format!("{minutes:0>2}:"));
+							format_string.push_str(&format!("{seconds:0>2}"));
+						} else {
+							format_string.push_str(&format!("{seconds}s"));
+						}
+
+						format_string
+					},
 					checks_message = checks_message,
 					reviewers = reviewers.join(", "),
 					commit_link = commit_link(&repo_owner.login, &repo.name, run_commit_sha),
@@ -478,8 +479,6 @@ async fn success_run(
 					),
 				)
 				.await?;
-
-				tracing::error!("failed to push branch {}: {:#}", pr.target_branch, e);
 			}
 		}
 	}
