@@ -29,6 +29,8 @@ pub struct Config {
 	pub metrics_bind: Option<SocketAddr>,
 	#[default(env_or_default("DATABASE_URL", None))]
 	pub db_url: Option<String>,
+	#[default(10)]
+	pub interval_seconds: u64,
 	pub github: GitHub,
 }
 
@@ -180,10 +182,25 @@ impl scuffle_brawl::github::WebhookConfig for Global {
 	}
 }
 
+impl scuffle_brawl::github::AutoStartConfig for Global {
+	fn interval(&self) -> std::time::Duration {
+		std::time::Duration::from_secs(self.config.interval_seconds)
+	}
+
+	fn database_pool(&self) -> &bb8::Pool<AsyncPgConnection> {
+		&self.database
+	}
+
+	fn github_service(&self) -> &GitHubService {
+		&self.github_service
+	}
+}
+
 scuffle_bootstrap::main! {
 	Global {
 		scuffle_signal::SignalSvc,
 		scuffle_bootstrap_telemetry::TelemetrySvc,
 		scuffle_brawl::github::WebhookSvc,
+		scuffle_brawl::github::AutoStartSvc,
 	}
 }

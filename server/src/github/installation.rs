@@ -120,6 +120,10 @@ impl InstallationClient {
 			.collect()
 	}
 
+	pub fn has_repository(&self, repo_id: RepositoryId) -> bool {
+		self.repositories.lock().contains_key(&repo_id)
+	}
+
 	pub async fn get_user(&self, user_id: UserId) -> anyhow::Result<UserProfile> {
 		self.users
 			.try_get_with::<_, octocrab::Error>(user_id, async {

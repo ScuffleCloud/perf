@@ -129,10 +129,12 @@ CREATE TABLE github_ci_run_status_checks (
 
 -- This index enforces the concurrency group constraint, ensuring that only one CI run
 -- can be running at a time on a given repository concurrency group.
-CREATE UNIQUE INDEX github_ci_runs_ci_branch_idx ON github_ci_runs (github_repo_id, ci_branch) WHERE status != 'queued' AND completed_at IS NULL;
+CREATE UNIQUE INDEX ON github_ci_runs(github_repo_id, ci_branch) WHERE status != 'queued' AND completed_at IS NULL;
 
 -- This index ensures that only one CI run can be running at a time for a given PR.
-CREATE UNIQUE INDEX github_ci_runs_pr_idx ON github_ci_runs (github_repo_id, github_pr_number) WHERE completed_at IS NULL;
+CREATE UNIQUE INDEX ON github_ci_runs(github_repo_id, github_pr_number) WHERE completed_at IS NULL;
 
 -- This index ensures that we can quickly find a CI run by its commit SHA.
-CREATE INDEX github_ci_runs_run_commit_sha_idx ON github_ci_runs (run_commit_sha);
+CREATE INDEX ON github_ci_runs(run_commit_sha);
+
+CREATE INDEX ON github_ci_runs(github_repo_id, ci_branch) WHERE completed_at IS NULL;

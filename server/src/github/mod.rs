@@ -3,16 +3,16 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use installation::InstallationClient;
-use octocrab::models::{AppId, Installation, InstallationId, UserId};
+use octocrab::models::{AppId, Installation, InstallationId, RepositoryId, UserId};
 use octocrab::Octocrab;
 
+pub mod auto_start;
 pub mod config;
 pub mod installation;
 pub mod webhook;
 
 pub struct GitHubService {
 	client: Octocrab,
-	user_to_installation: parking_lot::Mutex<HashMap<UserId, InstallationId>>,
 	installations: parking_lot::Mutex<HashMap<InstallationId, Arc<InstallationClient>>>,
 }
 
@@ -47,7 +47,6 @@ impl GitHubService {
 		Ok(Self {
 			client,
 			installations: parking_lot::Mutex::new(installations),
-			user_to_installation: parking_lot::Mutex::new(user_to_installation),
 		})
 	}
 
@@ -56,8 +55,19 @@ impl GitHubService {
 	}
 
 	pub fn get_client_by_user(&self, user_id: UserId) -> Option<Arc<InstallationClient>> {
-		let installation_id = self.user_to_installation.lock().get(&user_id).copied()?;
-		self.get_client(installation_id)
+		self.installations
+			.lock()
+			.values()
+			.find(|client| client.installation().account.id == user_id)
+			.cloned()
+	}
+
+	pub fn get_client_by_repo(&self, repo_id: RepositoryId) -> Option<Arc<InstallationClient>> {
+		self.installations
+			.lock()
+			.values()
+			.find(|client| client.has_repository(repo_id))
+			.cloned()
 	}
 
 	pub fn installations(&self) -> HashMap<InstallationId, Arc<InstallationClient>> {
@@ -71,7 +81,6 @@ impl GitHubService {
 			install.fetch_repositories().await?;
 		} else {
 			let installation_id = installation.id;
-			let account_id = installation.account.id;
 			let login = installation.account.login.clone();
 			let client = self
 				.client
@@ -86,7 +95,6 @@ impl GitHubService {
 
 			client.fetch_repositories().await?;
 
-			self.user_to_installation.lock().insert(account_id, installation_id);
 			self.installations.lock().insert(installation_id, client);
 		}
 
@@ -94,11 +102,9 @@ impl GitHubService {
 	}
 
 	pub fn delete_installation(&self, installation_id: InstallationId) {
-		let install = self.installations.lock().remove(&installation_id);
-		if let Some(install) = install {
-			self.user_to_installation.lock().remove(&install.installation().account.id);
-		}
+		self.installations.lock().remove(&installation_id);
 	}
 }
 
+pub use auto_start::{AutoStartConfig, AutoStartSvc};
 pub use webhook::{WebhookConfig, WebhookSvc};

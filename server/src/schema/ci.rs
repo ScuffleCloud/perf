@@ -6,8 +6,7 @@ use anyhow::Context;
 use axum::http;
 use chrono::Utc;
 use diesel::prelude::{Insertable, Queryable};
-use diesel::query_dsl::methods::{FilterDsl, LimitDsl, OrderDsl, SelectDsl};
-use diesel::{BoolExpressionMethods, ExpressionMethods, OptionalExtension, Selectable, SelectableHelper};
+use diesel::{BoolExpressionMethods, ExpressionMethods, OptionalExtension, QueryDsl, Selectable, SelectableHelper};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use octocrab::models::pulls::PullRequest;
 use octocrab::models::{RepositoryId, UserId};
@@ -272,7 +271,7 @@ impl CiRun {
 		conn: &mut AsyncPgConnection,
 		repo_id: RepositoryId,
 		pr_number: i64,
-	) -> anyhow::Result<Option<Self>> {
+	) -> Result<Option<Self>, diesel::result::Error> {
 		crate::schema::github_ci_runs::dsl::github_ci_runs
 			.select(CiRun::as_select())
 			.filter(
@@ -284,14 +283,13 @@ impl CiRun {
 			.get_result::<CiRun>(conn)
 			.await
 			.optional()
-			.context("select")
 	}
 
 	pub async fn get_latest(
 		conn: &mut AsyncPgConnection,
 		repo_id: RepositoryId,
 		pr_number: i64,
-	) -> anyhow::Result<Option<Self>> {
+	) -> Result<Option<Self>, diesel::result::Error> {
 		crate::schema::github_ci_runs::dsl::github_ci_runs
 			.select(CiRun::as_select())
 			.filter(
@@ -304,17 +302,26 @@ impl CiRun {
 			.get_result::<CiRun>(conn)
 			.await
 			.optional()
-			.context("select")
 	}
 
-	pub async fn find_by_run_commit_sha(conn: &mut AsyncPgConnection, run_commit_sha: &str) -> anyhow::Result<Option<Self>> {
+	pub async fn find_by_run_commit_sha(
+		conn: &mut AsyncPgConnection,
+		run_commit_sha: &str,
+	) -> Result<Option<Self>, diesel::result::Error> {
 		crate::schema::github_ci_runs::dsl::github_ci_runs
 			.select(CiRun::as_select())
 			.filter(crate::schema::github_ci_runs::run_commit_sha.eq(run_commit_sha))
 			.get_result::<CiRun>(conn)
 			.await
 			.optional()
-			.context("select")
+	}
+
+	pub async fn find_pending_runs(conn: &mut AsyncPgConnection) -> Result<Vec<Self>, diesel::result::Error> {
+		crate::schema::github_ci_runs::dsl::github_ci_runs
+			.select(CiRun::as_select())
+			.filter(crate::schema::github_ci_runs::completed_at.is_null())
+			.get_results::<CiRun>(conn)
+			.await
 	}
 }
 
@@ -339,6 +346,19 @@ async fn fail_run(
 		.send_message(pr_number as u64, message)
 		.await
 		.context("send message")?;
+
+	let repo = repo_client.get()?;
+	let repo_owner = repo.owner.context("repo owner")?;
+
+	tracing::info!(
+		run_id = %run_id,
+		repo_id = %repo.id,
+		pr_number = %pr_number,
+		"failed ci run on https://github.com/{owner}/{repo}/pull/{pr_number}",
+		owner = repo_owner.login,
+		repo = repo.name,
+		pr_number = pr_number
+	);
 
 	Ok(())
 }
@@ -683,6 +703,16 @@ handled during merge and rebase. This is normal, and you should still perform st
 		)
 		.await?;
 
+	tracing::info!(
+		run_id = %run_id,
+		repo_id = %ci_run.github_repo_id,
+		"started ci run on https://github.com/{owner}/{repo}/pull/{pr_number} (commit {run_sha}) ({run_type})",
+		owner = repo_owner.login,
+		repo = repo.name,
+		pr_number = ci_run.github_pr_number,
+		run_sha = commit.sha,
+		run_type = if ci_run.is_dry_run { "dry run" } else { "merge" }
+	);
 	Ok(true)
 }
 
@@ -691,7 +721,7 @@ pub async fn cancel_ci_run(
 	run_id: i32,
 	client: &Arc<InstallationClient>,
 ) -> anyhow::Result<()> {
-	let Some((run_commit_sha, repo_id)) = diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
+	let Some(ci_run) = diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
 		.filter(
 			crate::schema::github_ci_runs::id
 				.eq(run_id)
@@ -701,11 +731,8 @@ pub async fn cancel_ci_run(
 			crate::schema::github_ci_runs::status.eq(GithubCiRunStatus::Cancelled),
 			crate::schema::github_ci_runs::completed_at.eq(chrono::Utc::now()),
 		))
-		.returning((
-			crate::schema::github_ci_runs::run_commit_sha,
-			crate::schema::github_ci_runs::github_repo_id,
-		))
-		.get_result::<(Option<String>, i64)>(conn)
+		.returning(CiRun::as_select())
+		.get_result::<CiRun>(conn)
 		.await
 		.optional()
 		.context("update")?
@@ -713,11 +740,31 @@ pub async fn cancel_ci_run(
 		return Ok(());
 	};
 
-	tracing::info!("cancelled ci run {run_id} for {repo_id}");
+	let repo_client = client
+		.get_repository(RepositoryId(ci_run.github_repo_id as u64))
+		.context("get repository")?;
 
-	if let Some(run_commit_sha) = run_commit_sha {
-		// TODO: cancel all checks on this commit on GitHub
-	}
+	let repo = repo_client.get()?;
+	let repo_owner = repo.owner.context("repo owner")?;
+
+	tracing::info!(
+		run_id = %run_id,
+		repo_id = %ci_run.github_repo_id,
+		"cancelled ci run on https://github.com/{owner}/{repo}/pull/{pr_number} (commit {run_sha}) ({run_type})",
+		owner = repo_owner.login,
+		repo = repo.name,
+		pr_number = ci_run.github_pr_number,
+		run_sha = if let Some(run_commit_sha) = &ci_run.run_commit_sha {
+			run_commit_sha.as_str()
+		} else {
+			"<not started>"
+		},
+		run_type = if ci_run.is_dry_run { "dry run" } else { "merge" }
+	);
+
+	// if let Some(run_commit_sha) = ci_run.run_commit_sha {
+	// 	// TODO: cancel all checks on this commit on GitHub
+	// }
 
 	let _ = client;
 

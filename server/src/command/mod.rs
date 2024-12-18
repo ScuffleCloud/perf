@@ -5,25 +5,25 @@ use anyhow::Context;
 use diesel_async::pooled_connection::bb8;
 use diesel_async::AsyncPgConnection;
 use dry_run::DryRunCommand;
+use merge::MergeCommand;
 use octocrab::models::pulls::PullRequest;
 use octocrab::models::{Author, RepositoryId, UserId, UserProfile};
-use review::ReviewCommand;
 
 use crate::github::config::GitHubBrawlRepoConfig;
 use crate::github::installation::InstallationClient;
 
 mod cancel;
 mod dry_run;
+mod merge;
 mod ping;
 mod pr;
 mod retry;
-mod review;
 
 pub use pr::PullRequestCommand;
 
 pub enum BrawlCommand {
 	DryRun(DryRunCommand),
-	Review(ReviewCommand),
+	Review(MergeCommand),
 	Retry,
 	Cancel,
 	Ping,
@@ -74,7 +74,7 @@ impl BrawlCommand {
 
 		match self {
 			BrawlCommand::DryRun(command) => dry_run::handle(client, &mut conn, context, command).await,
-			BrawlCommand::Review(command) => review::handle(client, &mut conn, context, command).await,
+			BrawlCommand::Review(command) => merge::handle(client, &mut conn, context, command).await,
 			BrawlCommand::Retry => retry::handle(client, &mut conn, context).await,
 			BrawlCommand::Cancel => cancel::handle(client, &mut conn, context).await,
 			BrawlCommand::Ping => ping::handle(client, &mut conn, context).await,
@@ -142,7 +142,7 @@ impl FromStr for BrawlCommand {
 					}
 				}
 
-				Ok(BrawlCommand::Review(ReviewCommand { reviewers, priority }))
+				Ok(BrawlCommand::Review(MergeCommand { reviewers, priority }))
 			}
 			"cancel" => Ok(BrawlCommand::Cancel),
 			"try" => {

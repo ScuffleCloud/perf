@@ -9,7 +9,7 @@ use crate::schema::ci::{Base, CiRun, Head, InsertCiRun};
 use crate::schema::pr::{Pr, UpdatePr};
 
 #[derive(Debug)]
-pub struct ReviewCommand {
+pub struct MergeCommand {
 	pub reviewers: Vec<String>,
 	pub priority: Option<i32>,
 }
@@ -18,7 +18,7 @@ pub async fn handle(
 	client: &Arc<InstallationClient>,
 	conn: &mut AsyncPgConnection,
 	context: BrawlCommandContext,
-	command: ReviewCommand,
+	command: MergeCommand,
 ) -> anyhow::Result<()> {
 	if !context.config.enabled {
 		return Ok(());
@@ -44,6 +44,7 @@ pub async fn handle(
 
 	if let Some(priority) = command.priority {
 		update.default_priority = Some(priority);
+		current.default_priority = Some(priority);
 	}
 
 	let mut provided_reviewers = Vec::new();
@@ -63,7 +64,8 @@ pub async fn handle(
 	}
 
 	if provided_reviewers != current.reviewer_ids {
-		update.reviewer_ids = Some(provided_reviewers);
+		update.reviewer_ids = Some(provided_reviewers.clone());
+		current.reviewer_ids = provided_reviewers;
 	}
 
 	if let Some(run) = CiRun::get_active(conn, context.repo_id, context.pr.number as i64).await? {
@@ -77,7 +79,11 @@ pub async fn handle(
 		base_ref: &Base::from_pr(&context.pr).to_string(),
 		head_commit_sha: Head::from_pr(&context.pr).sha(),
 		run_commit_sha: None,
-		ci_branch: &context.config.temp_branch_prefix,
+		ci_branch: &format!(
+			"{}/{}",
+			context.config.merge_branch_prefix.trim_end_matches('/'),
+			context.pr.base.ref_field
+		),
 		priority: command.priority.unwrap_or(current.default_priority.unwrap_or(5)),
 		requested_by_id: context.user.id.0 as i64,
 		is_dry_run: false,
