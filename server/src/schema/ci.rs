@@ -215,7 +215,7 @@ impl CiRun {
 				fail_run(
 					conn,
 					&repo_client,
-					self.id,
+					self,
 					self.github_pr_number,
 					&format!(
 						"💔 Test failed - [{check}]({check_url})",
@@ -239,7 +239,7 @@ impl CiRun {
 			fail_run(
 				conn,
 				&repo_client,
-				self.id,
+				self,
 				self.github_pr_number,
 				&format!(
 					"💔 CI run timed out after {timeout} minutes\n{missing_checks}",
@@ -328,12 +328,12 @@ impl CiRun {
 async fn fail_run(
 	conn: &mut AsyncPgConnection,
 	repo_client: &RepoClient<'_>,
-	run_id: i32,
+	run: &CiRun,
 	pr_number: i32,
 	message: &str,
 ) -> anyhow::Result<()> {
 	diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
-		.filter(crate::schema::github_ci_runs::id.eq(run_id))
+		.filter(crate::schema::github_ci_runs::id.eq(run.id))
 		.set((
 			crate::schema::github_ci_runs::status.eq(GithubCiRunStatus::Failure),
 			crate::schema::github_ci_runs::completed_at.eq(chrono::Utc::now()),
@@ -351,14 +351,17 @@ async fn fail_run(
 	let repo_owner = repo.owner.context("repo owner")?;
 
 	tracing::info!(
-		run_id = %run_id,
-		repo_id = %repo.id,
-		pr_number = %pr_number,
-		"failed ci run on https://github.com/{owner}/{repo}/pull/{pr_number}",
-		owner = repo_owner.login,
-		repo = repo.name,
-		pr_number = pr_number
+		run_id = %run.id,
+		repo_id = %run.github_repo_id,
+		pr_number = %run.github_pr_number,
+		run_type = if run.is_dry_run { "dry run" } else { "merge" },
+		run_sha = run.run_commit_sha.as_deref().unwrap_or("<not started>"),
+		run_branch = run.ci_branch,
+		url = format!("https://github.com/{owner}/{repo}/pull/{pr_number}", owner = repo_owner.login, repo = repo.name, pr_number = run.github_pr_number),
+		"ci run failed",
 	);
+
+	repo_client.delete_branch(&run.ci_branch).await?;
 
 	Ok(())
 }
@@ -469,7 +472,7 @@ async fn success_run(
 				fail_run(
 					conn,
 					&repo_client,
-					run.id,
+					run,
 					run.github_pr_number,
 					&format!(
 						r#"🚨 Tests passed but failed to push to {target_branch}
@@ -489,6 +492,31 @@ async fn success_run(
 		}
 	}
 
+	tracing::info!(
+		run_id = %run.id,
+		repo_id = %run.github_repo_id,
+		pr_number = %run.github_pr_number,
+		run_type = if run.is_dry_run { "dry run" } else { "merge" },
+		run_sha = run.run_commit_sha.as_deref().unwrap_or("<not started>"),
+		run_branch = run.ci_branch,
+		url = format!("https://github.com/{owner}/{repo}/pull/{pr_number}", owner = repo_owner.login, repo = repo.name, pr_number = run.github_pr_number),
+		"ci run completed",
+	);
+
+	// Delete the CI branch
+	match repo_client.delete_branch(&run.ci_branch).await {
+		Ok(_) => {}
+		Err(e) => {
+			tracing::error!(
+				run_id = %run.id,
+				repo_id = %run.github_repo_id,
+				pr_number = %run.github_pr_number,
+				ci_branch = %run.ci_branch,
+				"failed to delete ci branch: {e:#}",
+			);
+		}
+	}
+
 	Ok(())
 }
 
@@ -499,19 +527,7 @@ pub async fn start_ci_run(
 	config: &GitHubBrawlRepoConfig,
 	pr: &Pr<'_>,
 ) -> anyhow::Result<bool> {
-	#[derive(Queryable, Selectable)]
-	#[diesel(table_name = crate::schema::github_ci_runs)]
-	struct UpdateResult {
-		github_repo_id: i64,
-		github_pr_number: i32,
-		base_ref: String,
-		head_commit_sha: String,
-		ci_branch: String,
-		requested_by_id: i64,
-		is_dry_run: bool,
-	}
-
-	let update = diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
+	let run = diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
 		.filter(
 			crate::schema::github_ci_runs::id
 				.eq(run_id)
@@ -521,32 +537,32 @@ pub async fn start_ci_run(
 			crate::schema::github_ci_runs::status.eq(GithubCiRunStatus::InProgress),
 			crate::schema::github_ci_runs::started_at.eq(chrono::Utc::now()),
 		))
-		.returning(UpdateResult::as_select())
-		.get_result::<UpdateResult>(conn)
+		.returning(CiRun::as_select())
+		.get_result::<CiRun>(conn)
 		.await
 		.optional()
 		.context("update")?;
 
-	let Some(ci_run) = update else {
+	let Some(run) = run else {
 		return Ok(false);
 	};
 
 	let repo_client = client
-		.get_repository(RepositoryId(ci_run.github_repo_id as u64))
+		.get_repository(RepositoryId(run.github_repo_id as u64))
 		.context("get repository")?;
 
 	let repo = repo_client.get()?;
 	let repo_owner = repo.owner.context("repo owner")?;
 
-	let base_sha = match Base::from_string(&ci_run.base_ref) {
+	let base_sha = match Base::from_string(&run.base_ref) {
 		Some(Base::Commit(sha)) => sha,
 		Some(Base::Branch(branch)) => {
 			let Some(branch) = repo_client.get_ref(&Reference::Branch(branch.to_string())).await? else {
 				fail_run(
 					conn,
 					&repo_client,
-					run_id,
-					ci_run.github_pr_number,
+					&run,
+					run.github_pr_number,
 					&format!("🚨 Failed to find base branch `{branch}`"),
 				)
 				.await?;
@@ -564,8 +580,8 @@ pub async fn start_ci_run(
 
 	let mut reviewers = Vec::new();
 	let mut reviewed_by = Vec::new();
-	if ci_run.is_dry_run {
-		let user = client.get_user(UserId(ci_run.requested_by_id as u64)).await?;
+	if run.is_dry_run {
+		let user = client.get_user(UserId(run.requested_by_id as u64)).await?;
 		reviewed_by.push(format!(
 			"Reviewed-by: {login} <{id}+{login}@users.noreply.github.com>",
 			login = user.login,
@@ -586,7 +602,7 @@ pub async fn start_ci_run(
 
 	let commit_message = format!(
 		"Auto merge of {issue} - {branch}, r={reviewers}\n\n{title}\n{body}\n\n{reviewed_by}",
-		issue = issue_link(&repo_owner.login, &repo.name, ci_run.github_pr_number as u64),
+		issue = issue_link(&repo_owner.login, &repo.name, run.github_pr_number as u64),
 		branch = pr.source_branch,
 		reviewers = reviewers.join(", "),
 		title = pr.title,
@@ -595,12 +611,7 @@ pub async fn start_ci_run(
 	);
 
 	let commit = match repo_client
-		.create_merge(
-			&commit_message,
-			&config.temp_branch_prefix,
-			&base_sha,
-			&ci_run.head_commit_sha,
-		)
+		.create_merge(&commit_message, &config.temp_branch_prefix, &base_sha, &run.head_commit_sha)
 		.await
 	{
 		Ok(commit) => commit,
@@ -640,7 +651,7 @@ handled during merge and rebase. This is normal, and you should still perform st
 
 </details>
 "#,
-					head_sha = commit_link(&repo_owner.login, &repo.name, &ci_run.head_commit_sha),
+					head_sha = commit_link(&repo_owner.login, &repo.name, &run.head_commit_sha),
 					base_sha = commit_link(&repo_owner.login, &repo.name, &base_sha),
 					source_branch = pr.source_branch,
 					target_branch = pr.target_branch,
@@ -659,19 +670,19 @@ handled during merge and rebase. This is normal, and you should still perform st
 				)
 			};
 
-			fail_run(conn, &repo_client, run_id, ci_run.github_pr_number, &message).await?;
+			fail_run(conn, &repo_client, &run, run.github_pr_number, &message).await?;
 			return Ok(false);
 		}
 	};
 
-	match repo_client.push_branch(&ci_run.ci_branch, &commit.sha, true).await {
+	match repo_client.push_branch(&run.ci_branch, &commit.sha, true).await {
 		Ok(_) => {}
 		Err(e) => {
 			fail_run(
 				conn,
 				&repo_client,
-				run_id,
-				ci_run.github_pr_number,
+				&run,
+				run.github_pr_number,
 				&format!(
 					r#"🚨 Failed to start CI run
 <details>
@@ -699,22 +710,24 @@ handled during merge and rebase. This is normal, and you should still perform st
 
 	repo_client
 		.send_message(
-			ci_run.github_pr_number as u64,
+			run.github_pr_number as u64,
 			format!(
 				"⌛ Trying commit {} with merge {}...",
-				commit_link(&repo_owner.login, &repo.name, &ci_run.head_commit_sha),
+				commit_link(&repo_owner.login, &repo.name, &run.head_commit_sha),
 				commit_link(&repo_owner.login, &repo.name, &commit.sha)
 			),
 		)
 		.await?;
 
 	tracing::info!(
-		run_id = %run_id,
-		repo_id = %ci_run.github_repo_id,
-		run_type = if ci_run.is_dry_run { "dry run" } else { "merge" },
+		run_id = %run.id,
+		repo_id = %run.github_repo_id,
+		pr_number = %run.github_pr_number,
+		run_type = if run.is_dry_run { "dry run" } else { "merge" },
 		run_sha = commit.sha,
-		url = format!("https://github.com/{owner}/{repo}/pull/{pr_number}", owner = repo_owner.login, repo = repo.name, pr_number = ci_run.github_pr_number),
-		"started ci run",
+		run_branch = run.ci_branch,
+		url = format!("https://github.com/{owner}/{repo}/pull/{pr_number}", owner = repo_owner.login, repo = repo.name, pr_number = run.github_pr_number),
+		"ci run started",
 	);
 
 	Ok(true)
@@ -725,7 +738,7 @@ pub async fn cancel_ci_run(
 	run_id: i32,
 	client: &Arc<InstallationClient>,
 ) -> anyhow::Result<()> {
-	let Some(ci_run) = diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
+	let Some(run) = diesel::update(crate::schema::github_ci_runs::dsl::github_ci_runs)
 		.filter(
 			crate::schema::github_ci_runs::id
 				.eq(run_id)
@@ -745,31 +758,29 @@ pub async fn cancel_ci_run(
 	};
 
 	let repo_client = client
-		.get_repository(RepositoryId(ci_run.github_repo_id as u64))
+		.get_repository(RepositoryId(run.github_repo_id as u64))
 		.context("get repository")?;
 
 	let repo = repo_client.get()?;
 	let repo_owner = repo.owner.context("repo owner")?;
 
 	tracing::info!(
-		run_id = %run_id,
-		repo_id = %ci_run.github_repo_id,
-		run_type = if ci_run.is_dry_run { "dry run" } else { "merge" },
-		run_sha = if let Some(run_commit_sha) = &ci_run.run_commit_sha {
-			run_commit_sha.as_str()
-		} else {
-			"<not started>"
-		},
-		url = format!("https://github.com/{owner}/{repo}/pull/{pr_number}", owner = repo_owner.login, repo = repo.name, pr_number = ci_run.github_pr_number),
-		"cancelled ci run",
+		run_id = %run.id,
+		repo_id = %run.github_repo_id,
+		pr_number = %run.github_pr_number,
+		run_type = if run.is_dry_run { "dry run" } else { "merge" },
+		run_sha = run.run_commit_sha.as_deref().unwrap_or("<not started>"),
+		run_branch = run.ci_branch,
+		url = format!("https://github.com/{owner}/{repo}/pull/{pr_number}", owner = repo_owner.login, repo = repo.name, pr_number = run.github_pr_number),
+		"ci run cancelled",
 	);
 
-	if let Some(run_commit_sha) = ci_run.run_commit_sha {
+	if let Some(run_commit_sha) = run.run_commit_sha {
 		let page = client
 			.client()
 			.workflows(repo_owner.login.clone(), repo.name.clone())
 			.list_all_runs()
-			.branch(ci_run.ci_branch.clone())
+			.branch(run.ci_branch.clone())
 			.per_page(100)
 			.page(1u32)
 			.send()
@@ -797,7 +808,7 @@ pub async fn cancel_ci_run(
 					.await?;
 				tracing::info!(
 					run_id = %run_id,
-					repo_id = %ci_run.github_repo_id,
+					repo_id = %run.github_repo_id,
 					"cancelled workflow {id} on https://github.com/{owner}/{repo}/actions/runs/{id}",
 					owner = repo_owner.login,
 					repo = repo.name,
@@ -805,9 +816,9 @@ pub async fn cancel_ci_run(
 				);
 			}
 		}
-	}
 
-	let _ = client;
+		repo_client.delete_branch(&run.ci_branch).await?;
+	}
 
 	Ok(())
 }
