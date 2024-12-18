@@ -19,10 +19,10 @@
 </p>
 
 <p align="center">
-    <a href="https://codecov.io/gh/ScuffleCloud/perf">
-        <img src="https://codecov.io/gh/ScuffleCloud/perf/graph/badge.svg?token=4i5XT2wMTH"/>
+    <a href="https://codecov.io/gh/ScuffleCloud/brawl">
+        <img src="https://codecov.io/gh/ScuffleCloud/brawl/graph/badge.svg?token=4i5XT2wMTH"/>
     </a>
-    <a href="https://deps.rs/repo/github/ScuffleCloud/perf">
+    <a href="https://deps.rs/repo/github/ScuffleCloud/brawl">
         <img src="https://deps.rs/repo/github/ScuffleCloud/perf/status.svg" alt="dependency status"/>
     </a>
 </p>
