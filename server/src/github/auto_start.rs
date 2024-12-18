@@ -39,7 +39,11 @@ impl<C: AutoStartConfig> scuffle_bootstrap::Service<C> for AutoStartSvc {
 					.entry((run.github_repo_id, run.ci_branch.as_str()))
 					.and_modify(|current| {
 						let higher_priority = run.started_at.is_some()
-							|| (run.priority, run.created_at) > (current.priority, current.created_at);
+							|| match current.priority.cmp(&run.priority) {
+								std::cmp::Ordering::Less => true,
+								std::cmp::Ordering::Greater => false,
+								std::cmp::Ordering::Equal => run.id < current.id,
+							};
 
 						if higher_priority && current.started_at.is_none() {
 							*current = run;
