@@ -23,7 +23,7 @@ pub use pr::PullRequestCommand;
 
 pub enum BrawlCommand {
 	DryRun(DryRunCommand),
-	Review(MergeCommand),
+	Merge(MergeCommand),
 	Retry,
 	Cancel,
 	Ping,
@@ -74,7 +74,7 @@ impl BrawlCommand {
 
 		match self {
 			BrawlCommand::DryRun(command) => dry_run::handle(client, &mut conn, context, command).await,
-			BrawlCommand::Review(command) => merge::handle(client, &mut conn, context, command).await,
+			BrawlCommand::Merge(command) => merge::handle(client, &mut conn, context, command).await,
 			BrawlCommand::Retry => retry::handle(client, &mut conn, context).await,
 			BrawlCommand::Cancel => cancel::handle(client, &mut conn, context).await,
 			BrawlCommand::Ping => ping::handle(client, &mut conn, context).await,
@@ -142,7 +142,7 @@ impl FromStr for BrawlCommand {
 					}
 				}
 
-				Ok(BrawlCommand::Review(MergeCommand { reviewers, priority }))
+				Ok(BrawlCommand::Merge(MergeCommand { reviewers, priority }))
 			}
 			"cancel" => Ok(BrawlCommand::Cancel),
 			"try" => {
