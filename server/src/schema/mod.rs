@@ -1,9 +1,9 @@
 // @generated automatically by Diesel CLI.
 
 pub mod ci;
-pub mod pr;
-pub mod enums;
 pub mod ci_checks;
+pub mod enums;
+pub mod pr;
 
 /// A module containing custom SQL type definitions
 ///
@@ -333,6 +333,7 @@ diesel::table! {
 
 diesel::joinable!(github_ci_run_status_checks -> github_ci_runs (github_ci_run_id));
 
+#[rustfmt::skip]
 diesel::allow_tables_to_appear_in_same_query!(
     github_ci_run_status_checks,
     github_ci_runs,
