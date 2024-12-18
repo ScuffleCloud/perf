@@ -44,32 +44,32 @@ macro_rules! impl_enum {
 }
 
 impl_enum!(GithubCiRunStatus, crate::schema::sql_types::GithubCiRunStatus, {
-	Queued => b"queued",
-	InProgress => b"in_progress",
-	Success => b"success",
-	Failure => b"failure",
-	Cancelled => b"cancelled",
+    Queued => b"queued",
+    InProgress => b"in_progress",
+    Success => b"success",
+    Failure => b"failure",
+    Cancelled => b"cancelled",
 });
 
 impl_enum!(GithubPrStatus, crate::schema::sql_types::GithubPrStatus, {
-	Open => b"open",
-	Closed => b"closed",
-	Draft => b"draft",
+    Open => b"open",
+    Closed => b"closed",
+    Draft => b"draft",
 });
 
 impl_enum!(GithubPrMergeStatus, crate::schema::sql_types::GithubPrMergeStatus, {
-	NotReady => b"not_ready",
-	Ready => b"ready",
-	Merged => b"merged",
-	Conflict => b"conflict",
-	CheckFailure => b"check_failure",
-	MergeFailure => b"merge_failure",
+    NotReady => b"not_ready",
+    Ready => b"ready",
+    Merged => b"merged",
+    Conflict => b"conflict",
+    CheckFailure => b"check_failure",
+    MergeFailure => b"merge_failure",
 });
 
 impl_enum!(GithubCiRunStatusCheckStatus, crate::schema::sql_types::GithubCiRunStatusCheckStatus, {
-	Pending => b"pending",
-	Success => b"success",
-	Failure => b"failure",
-	Skipped => b"skipped",
-	Cancelled => b"cancelled",
+    Pending => b"pending",
+    Success => b"success",
+    Failure => b"failure",
+    Skipped => b"skipped",
+    Cancelled => b"cancelled",
 });
