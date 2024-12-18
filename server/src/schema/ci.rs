@@ -363,9 +363,28 @@ async fn success_run(
 	let mut checks_message = String::new();
 	for check in checks {
 		checks_message.push_str(&format!(
-			"- [{name}]({url}) \n",
+			"- [{name}]({url}) (in {duration}) \n",
 			name = check.status_check_name,
 			url = check.url,
+			duration = {
+				let duration = check.completed_at.unwrap_or(chrono::Utc::now()).signed_duration_since(check.started_at);
+				let seconds = duration.num_seconds() % 60;
+				let minutes = (duration.num_seconds() / 60) % 60;
+				let hours = duration.num_seconds() / 60 / 60;
+				let mut format_string = String::new();
+				if hours > 0 {
+					format_string.push_str(&format!("{:0>2}:", hours));
+					format_string.push_str(&format!("{:0>2}:", minutes));
+					format_string.push_str(&format!("{:0>2}", seconds));
+				} else if minutes > 0 {
+					format_string.push_str(&format!("{:0>2}:", minutes));
+					format_string.push_str(&format!("{:0>2}", seconds));
+				} else {
+					format_string.push_str(&format!("{:0>2}s", seconds));
+				}
+
+				format_string
+			},
 		));
 	}
 
@@ -385,7 +404,7 @@ async fn success_run(
 			.send_message(
 				run.github_pr_number as u64,
 				format!(
-					"🎉 Try build successful!\n{checks_message}Build commit: {commit_link} (`{commit_sha}`)",
+					"🎉 Try build successful!\n{checks_message}\nBuild commit: {commit_link} (`{commit_sha}`)",
 					checks_message = checks_message,
 					commit_link = commit_link(&repo_owner.login, &repo.name, run_commit_sha),
 					commit_sha = run_commit_sha,
@@ -516,23 +535,27 @@ pub async fn start_ci_run(
 	};
 
 	let mut reviewers = Vec::new();
+	let mut reviewed_by = Vec::new();
 	if ci_run.is_dry_run {
 		let user = client.get_user(UserId(ci_run.requested_by_id as u64)).await?;
+		reviewed_by.push(format!("Reviewed-by: {login} <{id}+{login}@users.noreply.github.com>", login = user.login, id = user.id));
 		reviewers.push(user.login);
 	} else {
 		for id in &pr.reviewer_ids {
 			let user = client.get_user(UserId(*id as u64)).await?;
+			reviewed_by.push(format!("Reviewed-by: {login} <{id}+{login}@users.noreply.github.com>", login = user.login, id = user.id));
 			reviewers.push(user.login);
 		}
 	}
 
 	let commit_message = format!(
-		"Auto merge of {issue} - {branch}, r={reviewers}\n\n{title}\n{body}",
+		"Auto merge of {issue} - {branch}, r={reviewers}\n\n{title}\n{body}\n\n{reviewed_by}",
 		issue = issue_link(&repo_owner.login, &repo.name, ci_run.github_pr_number as u64),
 		branch = pr.source_branch,
 		reviewers = reviewers.join(", "),
 		title = pr.title,
 		body = pr.body,
+		reviewed_by = reviewed_by.join("\n"),
 	);
 
 	let commit = match repo_client
