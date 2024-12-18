@@ -29,7 +29,7 @@ pub struct Config {
 	pub metrics_bind: Option<SocketAddr>,
 	#[default(env_or_default("DATABASE_URL", None))]
 	pub db_url: Option<String>,
-	#[default(25)]
+	#[default(30)]
 	pub interval_seconds: u64,
 	pub github: GitHub,
 }
