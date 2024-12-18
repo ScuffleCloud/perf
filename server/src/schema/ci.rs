@@ -194,11 +194,6 @@ impl CiRun {
 			return Ok(());
 		};
 
-		if config.required_status_checks.is_empty() {
-			// Then this is instantly successful.
-			return Ok(());
-		}
-
 		let checks = CiCheck::get_for_run(conn, self.id).await?;
 
 		let checks = checks
@@ -241,30 +236,24 @@ impl CiRun {
 
 		if success {
 			success_run(conn, client, self, pr, required_checks.as_ref()).await?;
-		}
-
-		if Utc::now().signed_duration_since(started_at) > chrono::Duration::minutes(config.timeout_minutes as i64) {
+		} else if Utc::now().signed_duration_since(started_at) > chrono::Duration::minutes(config.timeout_minutes as i64) {
 			fail_run(
 				conn,
 				&repo_client,
 				self.id,
 				self.github_pr_number,
 				&format!(
-					r#"💔 CI run timed out after {timeout} minutes
-
-<details>
-<summary>Missing checks</summary>
-
-{missing_checks}
-
-</details>
-"#,
+					"💔 CI run timed out after {timeout} minutes\n{missing_checks}",
 					timeout = config.timeout_minutes,
 					missing_checks = {
 						let mut missing_checks_string = String::new();
 						for (name, check) in missing_checks {
 							if let Some(check) = check {
-								missing_checks_string.push_str(&format!("- [{name}]({url}) (pending)\n", name = name, url = check.url));
+								missing_checks_string.push_str(&format!(
+									"- [{name}]({url}) (pending)\n",
+									name = name,
+									url = check.url
+								));
 							} else {
 								missing_checks_string.push_str(&format!("- {name} (not started)\n", name = name));
 							}
@@ -374,9 +363,9 @@ async fn success_run(
 	let mut checks_message = String::new();
 	for check in checks {
 		checks_message.push_str(&format!(
-			"- [{name}]({url})\n",
+			"- [{name}]({url}) \n",
 			name = check.status_check_name,
-			url = check.url
+			url = check.url,
 		));
 	}
 

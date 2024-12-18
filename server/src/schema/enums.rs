@@ -71,4 +71,5 @@ impl_enum!(GithubCiRunStatusCheckStatus, crate::schema::sql_types::GithubCiRunSt
 	Success => b"success",
 	Failure => b"failure",
 	Skipped => b"skipped",
+	Cancelled => b"cancelled",
 });

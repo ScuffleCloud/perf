@@ -6,7 +6,7 @@ use diesel::query_dsl::methods::FilterDsl;
 use diesel::{ExpressionMethods, Selectable};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
-use crate::github::webhook::check_event::CheckRunEvent;
+use crate::github::webhook::check_event::{CheckRunConclusion, CheckRunEvent};
 use crate::schema::enums::GithubCiRunStatusCheckStatus;
 
 #[derive(Debug, Insertable, Queryable, Selectable, AsChangeset)]
@@ -28,9 +28,19 @@ impl<'a> CiCheck<'a> {
 			id: ci_check.id,
 			github_ci_run_id: ci_run_id,
 			status_check_name: Cow::Borrowed(&ci_check.name),
-			status_check_status: GithubCiRunStatusCheckStatus::Pending,
+			status_check_status: match ci_check.conclusion {
+				None => GithubCiRunStatusCheckStatus::Pending,
+				Some(CheckRunConclusion::Success) => GithubCiRunStatusCheckStatus::Success,
+				Some(CheckRunConclusion::TimedOut) | Some(CheckRunConclusion::Failure) => {
+					GithubCiRunStatusCheckStatus::Failure
+				}
+				Some(CheckRunConclusion::Cancelled) => GithubCiRunStatusCheckStatus::Cancelled,
+				Some(CheckRunConclusion::Skipped) => GithubCiRunStatusCheckStatus::Skipped,
+				Some(CheckRunConclusion::ActionRequired) => GithubCiRunStatusCheckStatus::Failure,
+				Some(CheckRunConclusion::Neutral) => GithubCiRunStatusCheckStatus::Pending, // not sure what this is
+			},
 			started_at: ci_check.started_at.unwrap_or(Utc::now()),
-			completed_at: None,
+			completed_at: ci_check.completed_at,
 			url: Cow::Borrowed(
 				ci_check
 					.html_url

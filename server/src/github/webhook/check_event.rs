@@ -14,6 +14,7 @@ use crate::schema::ci_checks::CiCheck;
 use crate::schema::pr::Pr;
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CheckRunStatus {
 	Queued,
 	InProgress,
@@ -24,6 +25,7 @@ pub enum CheckRunStatus {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CheckRunConclusion {
 	Success,
 	Failure,
