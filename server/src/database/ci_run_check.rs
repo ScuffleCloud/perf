@@ -1,16 +1,19 @@
 use std::borrow::Cow;
 
 use chrono::{DateTime, Utc};
+use diesel::pg::Pg;
 use diesel::prelude::{AsChangeset, Insertable, Queryable};
-use diesel::query_dsl::methods::FilterDsl;
-use diesel::{ExpressionMethods, Selectable};
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel::query_builder::QueryFragment;
+use diesel::query_dsl::methods::{FilterDsl, SelectDsl};
+use diesel::{ExpressionMethods, Selectable, SelectableHelper};
+use diesel_async::methods::{ExecuteDsl, LoadQuery};
+use diesel_async::AsyncPgConnection;
 
-use crate::github::webhook::check_event::{CheckRunConclusion, CheckRunEvent};
-use crate::schema::enums::GithubCiRunStatusCheckStatus;
+use super::enums::GithubCiRunStatusCheckStatus;
+use crate::webhook::check_event::{CheckRunConclusion, CheckRunEvent};
 
 #[derive(Debug, Insertable, Queryable, Selectable, AsChangeset)]
-#[diesel(table_name = crate::schema::github_ci_run_status_checks)]
+#[diesel(table_name = super::schema::github_ci_run_status_checks)]
 pub struct CiCheck<'a> {
     pub id: i64,
     pub github_ci_run_id: i32,
@@ -52,22 +55,17 @@ impl<'a> CiCheck<'a> {
         }
     }
 
-    pub async fn upsert(&self, conn: &mut AsyncPgConnection) -> Result<(), diesel::result::Error> {
-        diesel::insert_into(crate::schema::github_ci_run_status_checks::dsl::github_ci_run_status_checks)
+    pub fn upsert(&'a self) -> impl ExecuteDsl<AsyncPgConnection> + QueryFragment<Pg> + 'a {
+        diesel::insert_into(super::schema::github_ci_run_status_checks::dsl::github_ci_run_status_checks)
             .values(self)
-            .on_conflict(crate::schema::github_ci_run_status_checks::id)
+            .on_conflict(super::schema::github_ci_run_status_checks::id)
             .do_update()
             .set(self)
-            .execute(conn)
-            .await?;
-
-        Ok(())
     }
 
-    pub async fn get_for_run(conn: &mut AsyncPgConnection, run_id: i32) -> Result<Vec<Self>, diesel::result::Error> {
-        crate::schema::github_ci_run_status_checks::dsl::github_ci_run_status_checks
-            .filter(crate::schema::github_ci_run_status_checks::github_ci_run_id.eq(run_id))
-            .get_results(conn)
-            .await
+    pub fn for_run(run_id: i32) -> impl LoadQuery<'static, AsyncPgConnection, CiCheck<'static>> + QueryFragment<Pg> {
+        super::schema::github_ci_run_status_checks::dsl::github_ci_run_status_checks
+            .filter(super::schema::github_ci_run_status_checks::github_ci_run_id.eq(run_id))
+            .select(CiCheck::as_select())
     }
 }

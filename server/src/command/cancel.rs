@@ -1,43 +1,46 @@
-use std::sync::Arc;
-
 use anyhow::Context;
-use diesel_async::AsyncPgConnection;
+use diesel::OptionalExtension;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
 use super::BrawlCommandContext;
-use crate::github::installation::InstallationClient;
-use crate::schema::ci::CiRun;
-use crate::schema::pr::{Pr, UpdatePr};
+use crate::database::ci_run::CiRun;
+use crate::database::pr::Pr;
+use crate::github::installation::GitHubRepoClient;
+use crate::github::messages;
 
-pub async fn handle(
-    client: &Arc<InstallationClient>,
+pub async fn handle<R: GitHubRepoClient>(
     conn: &mut AsyncPgConnection,
-    context: BrawlCommandContext,
+    context: BrawlCommandContext<'_, R>,
 ) -> anyhow::Result<()> {
-    let mut current = Pr::fetch_or_create(context.repo_id, &context.pr, conn)
-        .await
-        .context("fetch pr")?;
-    UpdatePr::new(&context.pr, &mut current)
-        .do_update(conn)
+    Pr::new(&context.pr, context.user.id, context.repo.id())
+        .upsert()
+        .get_result(conn)
         .await
         .context("update pr")?;
 
-    if let Some(run) = CiRun::get_active(conn, context.repo_id, context.pr.number as i64).await? {
-        let perms = if run.is_dry_run {
-            context.config.try_permissions()
+    if let Some(run) = CiRun::active(context.repo.id(), context.pr.number)
+        .get_result(conn)
+        .await
+        .optional()
+        .context("fetch ci run")?
+    {
+        let has_perms = if run.is_dry_run {
+            context.repo.can_try(context.user.id).await?
         } else {
-            &context.config.merge_permissions
+            context.repo.can_merge(context.user.id).await?
         };
 
-        let repo_client = client.get_repository(context.repo_id).context("get repo")?;
-
-        if !repo_client.has_permission(context.user.id, perms).await? {
+        if !has_perms {
             tracing::debug!("user does not have permission to do this");
             return Ok(());
         }
 
-        run.cancel(conn, client).await.context("cancel ci run")?;
+        run.cancel(conn, context.repo).await.context("cancel ci run")?;
 
-        repo_client.send_message(context.issue_number, "🛑 Cancelled CI run").await?;
+        context
+            .repo
+            .send_message(context.pr.number, &messages::error_no_body("Cancelled CI run"))
+            .await?;
     }
 
     Ok(())

@@ -1,70 +1,81 @@
-use std::sync::Arc;
-
 use anyhow::Context;
-use diesel_async::AsyncPgConnection;
+use diesel::OptionalExtension;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
 use super::BrawlCommandContext;
-use crate::github::installation::InstallationClient;
-use crate::schema::ci::{CiRun, InsertCiRun};
-use crate::schema::pr::{Pr, UpdatePr};
+use crate::database::ci_run::CiRun;
+use crate::database::pr::Pr;
+use crate::github::installation::GitHubRepoClient;
+use crate::github::messages;
 
-pub async fn handle(
-    client: &Arc<InstallationClient>,
+pub async fn handle<R: GitHubRepoClient>(
     conn: &mut AsyncPgConnection,
-    context: BrawlCommandContext,
+    context: BrawlCommandContext<'_, R>,
 ) -> anyhow::Result<()> {
-    if !context.config.enabled {
+    if !context.repo.config().enabled {
         return Ok(());
     }
 
-    let repo_client = client.get_repository(context.repo_id).context("get repository")?;
+    let pr = Pr::new(&context.pr, context.user.id, context.repo.id())
+        .upsert()
+        .get_result(conn)
+        .await?;
 
-    let mut pr = Pr::fetch_or_create(context.repo_id, &context.pr, conn).await?;
-    UpdatePr::new(&context.pr, &mut pr).do_update(conn).await?;
-
-    let Some(run) = CiRun::get_latest(conn, context.repo_id, context.pr.number as i64).await? else {
-        repo_client
-            .send_message(context.issue_number, "🚨 There has never been a merge run on this PR.")
+    let Some(run) = CiRun::latest(context.repo.id(), context.pr.number)
+        .get_result(conn)
+        .await
+        .optional()
+        .context("fetch ci run")?
+    else {
+        context
+            .repo
+            .send_message(
+                context.pr.number,
+                &messages::error_no_body("There has never been a merge run on this PR."),
+            )
             .await?;
         return Ok(());
     };
 
     if run.completed_at.is_none() {
-        repo_client
+        context
+            .repo
             .send_message(
-                context.issue_number,
-                format!(
-                    "🚨 There is currently an active run, cancel it first using `?brawl {}`.",
-                    if run.is_dry_run { "-r" } else { "try cancel" }
-                ),
+                context.pr.number,
+                &messages::error_no_body("The previous run has not completed yet."),
             )
             .await?;
+
         return Ok(());
     }
 
-    let permissions = if run.is_dry_run {
-        &context.config.merge_permissions
+    let has_perms = if run.is_dry_run {
+        context.repo.can_try(context.user.id).await?
     } else {
-        context.config.try_permissions()
+        context.repo.can_merge(context.user.id).await?
     };
 
-    if !repo_client.has_permission(context.user.id, permissions).await? {
+    if !has_perms {
         return Ok(());
     }
 
-    InsertCiRun {
-        github_repo_id: context.repo_id.0 as i64,
-        github_pr_number: context.issue_number as i32,
-        base_ref: &run.base_ref,
-        head_commit_sha: &run.head_commit_sha,
-        run_commit_sha: None,
-        ci_branch: &run.ci_branch,
-        priority: run.priority,
-        requested_by_id: context.user.id.0 as i64,
-        is_dry_run: run.is_dry_run,
+    let run = CiRun::insert(context.repo.id(), context.pr.number)
+        .base_ref(run.base_ref)
+        .head_commit_sha(run.head_commit_sha)
+        .ci_branch(run.ci_branch)
+        .priority(run.priority)
+        .requested_by_id(context.user.id.0 as i64)
+        .is_dry_run(run.is_dry_run)
+        .build()
+        .query()
+        .get_result(conn)
+        .await?;
+
+    if run.is_dry_run {
+        run.start(conn, context.repo, &pr).await?;
+    } else {
+        run.queued(context.repo, &pr).await?;
     }
-    .insert(conn, client, &context.config, &pr)
-    .await?;
 
     Ok(())
 }

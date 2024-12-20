@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
-use installation::InstallationClient;
+use installation::{GitHubInstallationClient, InstallationClient};
 use octocrab::models::{AppId, Installation, InstallationId, RepositoryId, UserId};
 use octocrab::Octocrab;
 
-pub mod auto_start;
+pub mod ci;
 pub mod config;
 pub mod installation;
-pub mod webhook;
+pub mod messages;
 
 pub struct GitHubService {
     client: Octocrab,
@@ -66,7 +66,7 @@ impl GitHubService {
         self.installations
             .lock()
             .values()
-            .find(|client| client.has_repository(repo_id))
+            .find(|client| client.get_repository(repo_id).is_some())
             .cloned()
     }
 
@@ -105,6 +105,3 @@ impl GitHubService {
         self.installations.lock().remove(&installation_id);
     }
 }
-
-pub use auto_start::{AutoStartConfig, AutoStartSvc};
-pub use webhook::{WebhookConfig, WebhookSvc};

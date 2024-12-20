@@ -1,7 +1,7 @@
-#![cfg_attr(all(coverage_nightly, test), feature(coverage_attribute))]
 #![cfg_attr(all(coverage_nightly, test), coverage(off))]
 
 use std::net::SocketAddr;
+use std::ops::DerefMut;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -9,12 +9,14 @@ use diesel::query_dsl::methods::FindDsl;
 use diesel::ExpressionMethods;
 use diesel_async::pooled_connection::bb8::{self};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use octocrab::models::InstallationId;
 use scuffle_bootstrap_telemetry::opentelemetry;
 use scuffle_bootstrap_telemetry::opentelemetry_sdk::metrics::SdkMeterProvider;
 use scuffle_bootstrap_telemetry::opentelemetry_sdk::Resource;
 use scuffle_bootstrap_telemetry::prometheus_client::registry::Registry;
+use scuffle_brawl::database::schema::health_check;
+use scuffle_brawl::github::installation::{GitHubInstallationClient, InstallationClient, RepoClient};
 use scuffle_brawl::github::GitHubService;
-use scuffle_brawl::schema::health_check;
 use scuffle_metrics::opentelemetry::KeyValue;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -160,7 +162,9 @@ impl scuffle_bootstrap_telemetry::TelemetryConfig for Global {
     }
 }
 
-impl scuffle_brawl::github::WebhookConfig for Global {
+impl scuffle_brawl::webhook::WebhookConfig for Global {
+    type InstallationClient = Arc<InstallationClient>;
+
     fn bind_address(&self) -> Option<SocketAddr> {
         Some(self.config.github.webhook_bind)
     }
@@ -169,12 +173,23 @@ impl scuffle_brawl::github::WebhookConfig for Global {
         &self.config.github.webhook_secret
     }
 
-    fn github_service(&self) -> &GitHubService {
-        &self.github_service
+    fn installation_client(&self, installation_id: InstallationId) -> Option<Self::InstallationClient> {
+        self.github_service.get_client(installation_id)
     }
 
-    fn database_pool(&self) -> &bb8::Pool<AsyncPgConnection> {
-        &self.database
+    fn delete_installation(&self, installation_id: InstallationId) -> anyhow::Result<()> {
+        self.github_service.delete_installation(installation_id);
+        Ok(())
+    }
+
+    async fn update_installation(&self, installation: octocrab::models::Installation) -> anyhow::Result<()> {
+        self.github_service.update_installation(installation).await?;
+        Ok(())
+    }
+
+    async fn database(&self) -> anyhow::Result<impl DerefMut<Target = AsyncPgConnection> + Send> {
+        let conn = self.database.get().await.context("get database connection")?;
+        Ok(conn)
     }
 
     fn uptime(&self) -> std::time::Duration {
@@ -182,17 +197,22 @@ impl scuffle_brawl::github::WebhookConfig for Global {
     }
 }
 
-impl scuffle_brawl::github::AutoStartConfig for Global {
+impl scuffle_brawl::auto_start::AutoStartConfig for Global {
+    type RepoClient = RepoClient;
+
     fn interval(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.config.interval_seconds)
     }
 
-    fn database_pool(&self) -> &bb8::Pool<AsyncPgConnection> {
-        &self.database
+    async fn database(&self) -> anyhow::Result<impl DerefMut<Target = AsyncPgConnection> + Send> {
+        let conn = self.database.get().await.context("get database connection")?;
+        Ok(conn)
     }
 
-    fn github_service(&self) -> &GitHubService {
-        &self.github_service
+    fn repo_client(&self, repo_id: octocrab::models::RepositoryId) -> Option<Self::RepoClient> {
+        self.github_service
+            .get_client_by_repo(repo_id)
+            .and_then(|client| client.get_repository(repo_id))
     }
 }
 
@@ -200,7 +220,7 @@ scuffle_bootstrap::main! {
     Global {
         scuffle_signal::SignalSvc,
         scuffle_bootstrap_telemetry::TelemetrySvc,
-        scuffle_brawl::github::WebhookSvc,
-        scuffle_brawl::github::AutoStartSvc,
+        scuffle_brawl::webhook::WebhookSvc,
+        scuffle_brawl::auto_start::AutoStartSvc,
     }
 }

@@ -8,7 +8,7 @@ macro_rules! impl_enum {
             $variant:ident => $value:literal
         ),*$(,)?
     }) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, ::diesel::sql_types::SqlType, ::diesel::deserialize::FromSqlRow, ::diesel::expression::AsExpression)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, ::diesel::deserialize::FromSqlRow, ::diesel::expression::AsExpression)]
         #[diesel(sql_type = $sql_type)]
         pub enum $enum {
             $(
@@ -43,7 +43,7 @@ macro_rules! impl_enum {
     };
 }
 
-impl_enum!(GithubCiRunStatus, crate::schema::sql_types::GithubCiRunStatus, {
+impl_enum!(GithubCiRunStatus, super::schema::sql_types::GithubCiRunStatus, {
     Queued => b"queued",
     InProgress => b"in_progress",
     Success => b"success",
@@ -51,13 +51,13 @@ impl_enum!(GithubCiRunStatus, crate::schema::sql_types::GithubCiRunStatus, {
     Cancelled => b"cancelled",
 });
 
-impl_enum!(GithubPrStatus, crate::schema::sql_types::GithubPrStatus, {
+impl_enum!(GithubPrStatus, super::schema::sql_types::GithubPrStatus, {
     Open => b"open",
     Closed => b"closed",
     Draft => b"draft",
 });
 
-impl_enum!(GithubPrMergeStatus, crate::schema::sql_types::GithubPrMergeStatus, {
+impl_enum!(GithubPrMergeStatus, super::schema::sql_types::GithubPrMergeStatus, {
     NotReady => b"not_ready",
     Ready => b"ready",
     Merged => b"merged",
@@ -66,7 +66,7 @@ impl_enum!(GithubPrMergeStatus, crate::schema::sql_types::GithubPrMergeStatus, {
     MergeFailure => b"merge_failure",
 });
 
-impl_enum!(GithubCiRunStatusCheckStatus, crate::schema::sql_types::GithubCiRunStatusCheckStatus, {
+impl_enum!(GithubCiRunStatusCheckStatus, super::schema::sql_types::GithubCiRunStatusCheckStatus, {
     Pending => b"pending",
     Success => b"success",
     Failure => b"failure",

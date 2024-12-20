@@ -1,32 +1,28 @@
-use std::sync::Arc;
-
-use anyhow::Context;
 use diesel_async::AsyncPgConnection;
 
 use super::BrawlCommandContext;
-use crate::github::installation::InstallationClient;
+use crate::github::installation::GitHubRepoClient;
+use crate::github::messages;
 
-pub async fn handle(
-    client: &Arc<InstallationClient>,
+pub async fn handle<R: GitHubRepoClient>(
     _: &mut AsyncPgConnection,
-    context: BrawlCommandContext,
+    context: BrawlCommandContext<'_, R>,
 ) -> anyhow::Result<()> {
-    // I think we should have some info like the time it took to respond.
-    // The user name, & their permissions.
-    let status = if context.config.enabled { "enabled" } else { "disabled" };
-
     // Should we also say what permissions the user has?
-    let message = format!(
-        "Pong, @{user_name}!\nBrawl is currently {status} on this repo.",
-        user_name = context.user.login
-    );
-
-    client
-        .get_repository(context.repo_id)
-        .context("get repository")?
-        .send_message(context.issue_number, &message)
-        .await
-        .context("send message")?;
+    context
+        .repo
+        .send_message(
+            context.pr.number,
+            &messages::pong(
+                context.user.login,
+                if context.repo.config().enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+            ),
+        )
+        .await?;
 
     Ok(())
 }

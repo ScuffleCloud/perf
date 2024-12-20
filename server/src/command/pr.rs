@@ -1,13 +1,13 @@
-use std::sync::Arc;
-
 use anyhow::Context;
-use diesel_async::{AsyncConnection, AsyncPgConnection};
+use diesel::OptionalExtension;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
 use super::BrawlCommandContext;
-use crate::github::installation::InstallationClient;
-use crate::schema::ci::CiRun;
-use crate::schema::enums::GithubCiRunStatus;
-use crate::schema::pr::{Pr, UpdatePr};
+use crate::database::ci_run::CiRun;
+use crate::database::enums::GithubCiRunStatus;
+use crate::database::pr::Pr;
+use crate::github::installation::GitHubRepoClient;
+use crate::github::messages;
 
 #[derive(Debug)]
 pub enum PullRequestCommand {
@@ -18,47 +18,59 @@ pub enum PullRequestCommand {
     Closed,
 }
 
-pub async fn handle(
-    client: &Arc<InstallationClient>,
+pub async fn handle<R: GitHubRepoClient>(
     conn: &mut AsyncPgConnection,
-    context: BrawlCommandContext,
+    context: BrawlCommandContext<'_, R>,
     _: PullRequestCommand,
 ) -> anyhow::Result<()> {
-    // Try select the PR in the database first
+    let mut updated = false;
 
-    let repo_client = client.get_repository(context.repo_id).context("get repository")?;
+    if let Some(current) = Pr::find(context.repo.id(), context.pr.number)
+        .get_result(conn)
+        .await
+        .optional()
+        .context("fetch pr")?
+    {
+        let update = current.update_from(&context.pr);
+        if update.needs_update() {
+            update.query().execute(conn).await?;
+            updated = true;
+        }
+    } else {
+        Pr::new(&context.pr, context.user.id, context.repo.id())
+            .insert()
+            .execute(conn)
+            .await
+            .context("insert pr")?;
+    }
 
-    conn.transaction(|conn| {
-        Box::pin(async move {
-            let mut current = Pr::fetch_or_create(context.repo_id, &context.pr, conn).await?;
-
-            // Try figure out what changed
-            UpdatePr::new(&context.pr, &mut current).do_update(conn).await?;
-
-            if context.pr.merged_at.is_none() {
-                // We need to cancel the checks on the current run somehow...
-                if let Some(run) = CiRun::get_active(conn, context.repo_id, context.pr.number as i64).await? {
-                    if !run.is_dry_run {
-                        run.cancel(conn, client).await?;
-                        repo_client
-                            .send_message(
-                                run.github_pr_number as u64,
-                                &format!(
-                                    "🚨 PR state was changed while merge was {}, cancelling merge.",
-                                    match run.status {
-                                        GithubCiRunStatus::Queued => "queued",
-                                        GithubCiRunStatus::InProgress => "in progress",
-                                        _ => anyhow::bail!("impossible CI status: {:?}", run.status),
-                                    }
-                                ),
-                            )
-                            .await?;
-                    }
-                }
+    if updated && context.pr.merged_at.is_none() {
+        // We need to cancel the checks on the current run somehow...
+        if let Some(run) = CiRun::active(context.repo.id(), context.pr.number)
+            .get_result(conn)
+            .await
+            .optional()
+            .context("fetch ci run")?
+        {
+            if !run.is_dry_run {
+                run.cancel(conn, context.repo).await?;
+                context
+                    .repo
+                    .send_message(
+                        run.github_pr_number as u64,
+                        &messages::error_no_body(format!(
+                            "PR state was changed while merge was {}, cancelling merge.",
+                            match run.status {
+                                GithubCiRunStatus::Queued => "queued",
+                                GithubCiRunStatus::InProgress => "in progress",
+                                _ => anyhow::bail!("impossible CI status: {:?}", run.status),
+                            },
+                        )),
+                    )
+                    .await?;
             }
+        }
+    }
 
-            Ok(())
-        })
-    })
-    .await
+    Ok(())
 }

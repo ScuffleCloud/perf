@@ -1,16 +1,13 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::Context;
-use diesel_async::pooled_connection::bb8;
 use diesel_async::AsyncPgConnection;
 use dry_run::DryRunCommand;
 use merge::MergeCommand;
 use octocrab::models::pulls::PullRequest;
-use octocrab::models::{Author, RepositoryId, UserId, UserProfile};
+use octocrab::models::{Author, UserId, UserProfile};
 
-use crate::github::config::GitHubBrawlRepoConfig;
-use crate::github::installation::InstallationClient;
+use crate::github::installation::GitHubRepoClient;
 
 mod cancel;
 mod dry_run;
@@ -54,31 +51,25 @@ impl From<Author> for User {
     }
 }
 
-#[derive(Debug)]
-pub struct BrawlCommandContext {
-    pub repo_id: RepositoryId,
+pub struct BrawlCommandContext<'a, R> {
+    pub repo: &'a R,
     pub user: User,
-    pub issue_number: u64,
-    pub pr: PullRequest,
-    pub config: GitHubBrawlRepoConfig,
+    pub pr: Arc<PullRequest>,
 }
 
 impl BrawlCommand {
-    pub async fn handle(
+    pub async fn handle<R: GitHubRepoClient>(
         self,
-        client: &Arc<InstallationClient>,
-        database: &bb8::Pool<AsyncPgConnection>,
-        context: BrawlCommandContext,
+        conn: &mut AsyncPgConnection,
+        context: BrawlCommandContext<'_, R>,
     ) -> anyhow::Result<()> {
-        let mut conn = database.get().await.context("database get")?;
-
         match self {
-            BrawlCommand::DryRun(command) => dry_run::handle(client, &mut conn, context, command).await,
-            BrawlCommand::Merge(command) => merge::handle(client, &mut conn, context, command).await,
-            BrawlCommand::Retry => retry::handle(client, &mut conn, context).await,
-            BrawlCommand::Cancel => cancel::handle(client, &mut conn, context).await,
-            BrawlCommand::Ping => ping::handle(client, &mut conn, context).await,
-            BrawlCommand::PullRequest(command) => pr::handle(client, &mut conn, context, command).await,
+            BrawlCommand::DryRun(command) => dry_run::handle(conn, context, command).await,
+            BrawlCommand::Merge(command) => merge::handle(conn, context, command).await,
+            BrawlCommand::Retry => retry::handle(conn, context).await,
+            BrawlCommand::Cancel => cancel::handle(conn, context).await,
+            BrawlCommand::Ping => ping::handle(conn, context).await,
+            BrawlCommand::PullRequest(command) => pr::handle(conn, context, command).await,
         }
     }
 }

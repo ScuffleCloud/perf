@@ -1,13 +1,13 @@
-use std::sync::Arc;
-
 use anyhow::Context;
-use diesel_async::{AsyncConnection, AsyncPgConnection};
+use diesel::OptionalExtension;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
 use super::BrawlCommandContext;
-use crate::github::installation::InstallationClient;
-use crate::schema::ci::{Base, CiRun, Head, InsertCiRun};
-use crate::schema::enums::GithubCiRunStatus;
-use crate::schema::pr::{Pr, UpdatePr};
+use crate::database::ci_run::{Base, CiRun};
+use crate::database::enums::GithubCiRunStatus;
+use crate::database::pr::Pr;
+use crate::github::installation::GitHubRepoClient;
+use crate::github::messages;
 
 #[derive(Debug)]
 pub struct DryRunCommand {
@@ -15,30 +15,28 @@ pub struct DryRunCommand {
     pub base_sha: Option<String>,
 }
 
-pub async fn handle(
-    client: &Arc<InstallationClient>,
+pub async fn handle<R: GitHubRepoClient>(
     conn: &mut AsyncPgConnection,
-    context: BrawlCommandContext,
+    context: BrawlCommandContext<'_, R>,
     mut command: DryRunCommand,
 ) -> anyhow::Result<()> {
-    if !context.config.enabled {
+    if !context.repo.config().enabled {
         return Ok(());
     }
 
-    let repo_client = client.get_repository(context.repo_id).context("get repository")?;
-
-    if !repo_client
-        .has_permission(context.user.id, context.config.try_permissions())
-        .await?
-    {
+    if !context.repo.can_try(context.user.id).await? {
         tracing::debug!("user does not have permission to do this");
         return Ok(());
     }
 
     if let Some(base_sha) = &mut command.base_sha {
-        let Some(base_commit) = repo_client.get_commit_by_sha(base_sha).await.context("get base commit")? else {
-            repo_client
-                .send_message(context.issue_number, format!("Base commit `{}` was not found", base_sha))
+        let Some(base_commit) = context.repo.get_commit_by_sha(base_sha).await.context("get base commit")? else {
+            context
+                .repo
+                .send_message(
+                    context.pr.number,
+                    &messages::error_no_body(format!("Base commit `{base_sha}` was not found")),
+                )
                 .await?;
             return Ok(());
         };
@@ -47,21 +45,19 @@ pub async fn handle(
     }
 
     if let Some(head_sha) = &mut command.head_sha {
-        let Some(head_commit) = repo_client.get_commit_by_sha(head_sha).await.context("get head commit")? else {
-            repo_client
-                .send_message(context.issue_number, format!("Head commit `{}` was not found", head_sha))
+        let Some(head_commit) = context.repo.get_commit_by_sha(head_sha).await.context("get head commit")? else {
+            context
+                .repo
+                .send_message(
+                    context.pr.number,
+                    &messages::error_no_body(format!("Head commit `{head_sha}` was not found")),
+                )
                 .await?;
             return Ok(());
         };
 
         *head_sha = head_commit.sha;
     }
-
-    let head = command
-        .head_sha
-        .as_deref()
-        .map(Head::from_sha)
-        .unwrap_or_else(|| Head::from_pr(&context.pr));
 
     let base = command
         .base_sha
@@ -71,61 +67,61 @@ pub async fn handle(
 
     let branch = format!(
         "{}/{}",
-        context.config.try_branch_prefix.trim_end_matches('/'),
-        context.issue_number
+        context.repo.config().try_branch_prefix.trim_end_matches('/'),
+        context.pr.number
     );
 
-    conn.transaction(|conn| {
-        Box::pin(async {
-            let mut current = Pr::fetch_or_create(context.repo_id, &context.pr, conn).await?;
+    if let Some(run) = CiRun::active(context.repo.id(), context.pr.number)
+        .get_result(conn)
+        .await
+        .optional()
+        .context("fetch ci run")?
+    {
+        if run.is_dry_run {
+            run.cancel(conn, context.repo).await.context("cancel ci run")?;
+        } else {
+            context
+                .repo
+                .send_message(
+                    context.pr.number,
+                    &messages::error_no_body(format!(
+                        "This PR already has a active merge {}",
+                        match run.status {
+                            GithubCiRunStatus::Queued => "queued",
+                            GithubCiRunStatus::InProgress => "in progress",
+                            status => anyhow::bail!("impossible CI status: {:?}", status),
+                        }
+                    )),
+                )
+                .await?;
 
-            if let Some(run) = CiRun::get_active(conn, context.repo_id, context.pr.number as i64).await? {
-                if run.is_dry_run {
-                    run.cancel(conn, client).await.context("cancel ci run")?;
-                } else {
-                    repo_client
-                        .send_message(
-                            context.issue_number,
-                            &format!(
-                                "🚨 This PR already has a active merge {}",
-                                match run.status {
-                                    GithubCiRunStatus::Queued => "queued",
-                                    GithubCiRunStatus::InProgress => "in progress",
-                                    status => anyhow::bail!("impossible CI status: {:?}", status),
-                                }
-                            ),
-                        )
-                        .await?;
+            return Ok(());
+        }
+    }
 
-                    return Ok(());
-                }
-            }
+    Pr::new(&context.pr, context.user.id, context.repo.id())
+        .upsert()
+        .get_result(conn)
+        .await
+        .context("update pr")?;
 
-            UpdatePr::new(&context.pr, &mut current)
-                .do_update(conn)
-                .await
-                .context("update pr")?;
-
-            InsertCiRun {
-                github_repo_id: context.repo_id.0 as i64,
-                github_pr_number: context.issue_number as i32,
-                base_ref: &base.to_string(),
-                head_commit_sha: head.sha(),
-                run_commit_sha: None,
-                ci_branch: &branch,
-                priority: 0,
-                requested_by_id: context.user.id.0 as i64,
-                is_dry_run: true,
-            }
-            .insert(conn, client, &context.config, &current)
-            .await
-            .context("create ci run")?;
-
-            Ok(())
-        })
-    })
-    .await
-    .context("update pr merge queue")?;
+    CiRun::insert(context.repo.id(), context.pr.number)
+        .base_ref(base)
+        .head_commit_sha(
+            command
+                .head_sha
+                .as_deref()
+                .unwrap_or_else(|| context.pr.head.sha.as_ref())
+                .into(),
+        )
+        .ci_branch(branch.into())
+        .requested_by_id(context.user.id.0 as i64)
+        .is_dry_run(true)
+        .build()
+        .query()
+        .get_result(conn)
+        .await
+        .context("insert ci run")?;
 
     Ok(())
 }
