@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::ops::DerefMut;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -6,13 +7,13 @@ use anyhow::Context;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::{Json, RequestExt};
-use diesel_async::pooled_connection::bb8;
 use diesel_async::AsyncPgConnection;
 use hmac::{Hmac, Mac};
 use octocrab::models::webhook_events::payload::{
     InstallationWebhookEventAction, IssueCommentWebhookEventAction, PullRequestWebhookEventAction,
 };
 use octocrab::models::webhook_events::{EventInstallation, WebhookEventPayload, WebhookEventType};
+use octocrab::models::{Installation, InstallationId};
 use scuffle_context::ContextFutExt;
 use scuffle_http::backend::HttpServer;
 use serde::Serialize;
@@ -20,17 +21,29 @@ use sha2::Sha256;
 
 pub mod check_event;
 
-use super::GitHubService;
 use crate::command::{BrawlCommand, BrawlCommandContext, PullRequestCommand};
+use crate::github::installation::GitHubInstallationClient;
+use crate::github::repo::GitHubRepoClient;
 
 pub trait WebhookConfig: Send + Sync + 'static {
+    type InstallationClient: GitHubInstallationClient;
+
     fn webhook_secret(&self) -> &str;
 
     fn bind_address(&self) -> Option<SocketAddr>;
 
-    fn github_service(&self) -> &GitHubService;
+    fn installation_client(&self, installation_id: InstallationId) -> Option<Self::InstallationClient>;
 
-    fn database_pool(&self) -> &bb8::Pool<AsyncPgConnection>;
+    fn update_installation(
+        &self,
+        installation: Installation,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+
+    fn delete_installation(&self, installation_id: InstallationId) -> anyhow::Result<()>;
+
+    fn database(
+        &self,
+    ) -> impl std::future::Future<Output = anyhow::Result<impl DerefMut<Target = AsyncPgConnection> + Send>> + Send;
 
     fn uptime(&self) -> std::time::Duration;
 }
@@ -232,7 +245,16 @@ where
 
 async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent) -> anyhow::Result<()> {
     let installation_id = match &event.installation {
-        Some(EventInstallation::Full(installation)) => installation.id,
+        Some(EventInstallation::Full(installation)) => {
+            let installation_id = installation.id;
+
+            global
+                .update_installation(*installation.clone())
+                .await
+                .context("update_installation")?;
+
+            installation_id
+        }
         Some(EventInstallation::Minimal(installation)) => installation.id,
         None => {
             tracing::warn!("event does not have installation: {:?}", event.kind);
@@ -240,7 +262,7 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
         }
     };
 
-    let Some(client) = global.github_service().get_client(installation_id) else {
+    let Some(client) = global.installation_client(installation_id) else {
         tracing::error!("no client for installation {}", installation_id);
         return Ok(());
     };
@@ -248,17 +270,9 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
     match event.specific {
         WebhookEventPayload::Installation(install_event) => match install_event.action {
             InstallationWebhookEventAction::Deleted | InstallationWebhookEventAction::Suspend => {
-                global.github_service().delete_installation(installation_id);
+                global.delete_installation(installation_id).context("delete_installation")?;
             }
-            _ => {
-                if let Some(EventInstallation::Full(installation)) = event.installation {
-                    global
-                        .github_service()
-                        .update_installation(*installation)
-                        .await
-                        .context("update_installation")?;
-                }
-            }
+            _ => {}
         },
         WebhookEventPayload::InstallationRepositories(event) => {
             for repo in event.repositories_added {
@@ -266,12 +280,12 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
             }
 
             for repo in event.repositories_removed {
-                client.remove_repository(repo.id).await;
+                client.remove_repository(repo.id);
             }
         }
         WebhookEventPayload::Repository(_) => {
             if let Some(repo) = event.repository {
-                client.set_repository(repo).await;
+                client.set_repository(repo).await.context("set repository")?;
             }
         }
         WebhookEventPayload::PullRequest(mut pull_request_event) => {
@@ -295,13 +309,18 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
                 return Ok(());
             };
 
-            let Some(repo_client) = client.get_repository(repo_id) else {
+            let Some(repo_client) = client.get_repository(repo_id).await? else {
                 return Ok(());
             };
 
-            repo_client.set_pull_request(pull_request_event.pull_request.clone()).await;
+            repo_client
+                .set_pull_request(pull_request_event.pull_request.clone().into())
+                .await;
 
-            let config = client.get_repo_config(repo_id).await?;
+            let pr = repo_client
+                .get_pull_request(pull_request_event.pull_request.number)
+                .await
+                .context("get_pull_request")?;
 
             let Some(author) = event
                 .sender
@@ -313,14 +332,11 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
 
             command
                 .handle(
-                    &client,
-                    global.database_pool(),
+                    global.database().await?.deref_mut(),
                     BrawlCommandContext {
-                        repo_id,
+                        repo: &repo_client,
                         user: author.into(),
-                        issue_number: pull_request_event.pull_request.number,
-                        pr: pull_request_event.pull_request,
-                        config,
+                        pr,
                     },
                 )
                 .await?;
@@ -341,9 +357,7 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
                 return Ok(());
             };
 
-            let config = client.get_repo_config(repo.id).await?;
-
-            let Some(repo_client) = client.get_repository(repo.id) else {
+            let Some(repo_client) = client.get_repository(repo.id).await? else {
                 return Ok(());
             };
 
@@ -351,23 +365,22 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
 
             command
                 .handle(
-                    &client,
-                    global.database_pool(),
+                    global.database().await?.deref_mut(),
                     BrawlCommandContext {
-                        repo_id: repo.id,
+                        repo: &repo_client,
                         user: issue_comment_event.comment.user.into(),
-                        issue_number: issue_comment_event.issue.number,
                         pr,
-                        config,
                     },
                 )
                 .await?;
         }
         WebhookEventPayload::CheckRun(check_run_event) => {
             let repo = event.repository.context("missing repository")?;
-            let config = client.get_repo_config(repo.id).await?;
+            let Some(repo_client) = client.get_repository(repo.id).await? else {
+                return Ok(());
+            };
 
-            check_event::handle(&client, global.database_pool(), repo.id, &config, check_run_event.check_run)
+            check_event::handle(&repo_client, global.database().await?.deref_mut(), check_run_event.check_run)
                 .await
                 .context("handle_check_event")?;
         }

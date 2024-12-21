@@ -12,22 +12,24 @@ pub struct GitHubBrawlRepoConfig {
     pub labels: GitHubBrawlLabelsConfig,
     /// The target branches that this queue matches against.
     pub branches: Vec<String>,
-    /// The branch prefix for @brawl try commands (default:
-    /// "automation/brawl/try/")
+    /// The branch prefix for @brawl try commands
+    /// (default: "automation/brawl/try/")
     #[default("automation/brawl/try/")]
     pub try_branch_prefix: String,
-    /// The branch prefix for @brawl merge commands (default:
-    /// "automation/brawl/merge/")
+    /// The branch prefix for @brawl merge commands
+    /// (default: "automation/brawl/merge/")
     #[default("automation/brawl/merge/")]
     pub merge_branch_prefix: String,
     /// The branch prefix for temp branches used when performing merges
     /// (default: "automation/brawl/temp/")
     #[default("automation/brawl/temp/")]
     pub temp_branch_prefix: String,
-    /// The permissions required to merge a PR (default: ["role:write"])
+    /// The permissions required to merge a PR
+    /// (default: ["role:write"])
     #[default(vec![Permission::Role(Role::Push)])]
     pub merge_permissions: Vec<Permission>,
-    /// The status checks required to merge a PR (default: ["brawl-done"])
+    /// The status checks required to merge a PR
+    /// (default: ["brawl-done"])
     ///
     /// If brawl will wait for all of these status checks to be successful
     /// before merging. If not provided the PR will be merged instantly.
@@ -39,10 +41,18 @@ pub struct GitHubBrawlRepoConfig {
     /// required status checks are not met.
     #[default(60)]
     pub timeout_minutes: i32,
-    /// The permissions required to try a commit (default: <same as merge
-    /// permissions>)
+    /// The permissions required to try a commit
+    /// (default: <same as merge permissions>)
     #[default(None)]
     pub try_permissions: Option<Vec<Permission>>,
+    /// The maximum number of reviewers for a PR
+    /// (default: 10)
+    #[default(10)]
+    pub max_reviewers: i32,
+    /// The permissions required to be a reviewer
+    /// (default: <same as merge permissions>)
+    #[default(None)]
+    pub reviewer_permissions: Option<Vec<Permission>>,
 }
 
 impl GitHubBrawlRepoConfig {
@@ -55,6 +65,22 @@ impl GitHubBrawlRepoConfig {
 
     pub fn try_permissions(&self) -> &[Permission] {
         self.try_permissions.as_ref().unwrap_or(&self.merge_permissions)
+    }
+
+    pub fn reviewer_permissions(&self) -> &[Permission] {
+        self.reviewer_permissions.as_ref().unwrap_or(&self.merge_permissions)
+    }
+
+    pub fn merge_branch(&self, ref_field: &str) -> String {
+        format!("{}/{}", self.merge_branch_prefix.trim_end_matches('/'), ref_field)
+    }
+
+    pub fn temp_branch(&self) -> String {
+        format!("{}/{}", self.temp_branch_prefix.trim_end_matches('/'), uuid::Uuid::new_v4())
+    }
+
+    pub fn try_branch(&self, pr_number: u64) -> String {
+        format!("{}/{}", self.try_branch_prefix.trim_end_matches('/'), pr_number)
     }
 }
 
@@ -75,7 +101,7 @@ pub struct GitHubBrawlLabelsConfig {
     pub on_try_failure: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Permission {
     Role(Role),
     Team(String),

@@ -1,16 +1,12 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::Context;
-use diesel_async::pooled_connection::bb8;
 use diesel_async::AsyncPgConnection;
 use dry_run::DryRunCommand;
 use merge::MergeCommand;
-use octocrab::models::pulls::PullRequest;
-use octocrab::models::{Author, RepositoryId, UserId, UserProfile};
 
-use crate::github::config::GitHubBrawlRepoConfig;
-use crate::github::installation::InstallationClient;
+use crate::github::models::{PullRequest, User};
+use crate::github::repo::GitHubRepoClient;
 
 mod cancel;
 mod dry_run;
@@ -21,6 +17,7 @@ mod retry;
 
 pub use pr::PullRequestCommand;
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum BrawlCommand {
     DryRun(DryRunCommand),
     Merge(MergeCommand),
@@ -30,59 +27,30 @@ pub enum BrawlCommand {
     PullRequest(PullRequestCommand),
 }
 
-#[derive(Debug)]
-pub struct User {
-    pub id: UserId,
-    pub login: String,
-}
-
-impl From<UserProfile> for User {
-    fn from(user: UserProfile) -> Self {
-        Self {
-            id: user.id,
-            login: user.login,
-        }
-    }
-}
-
-impl From<Author> for User {
-    fn from(author: Author) -> Self {
-        Self {
-            id: author.id,
-            login: author.login,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct BrawlCommandContext {
-    pub repo_id: RepositoryId,
+pub struct BrawlCommandContext<'a, R> {
+    pub repo: &'a R,
     pub user: User,
-    pub issue_number: u64,
-    pub pr: PullRequest,
-    pub config: GitHubBrawlRepoConfig,
+    pub pr: Arc<PullRequest>,
 }
 
 impl BrawlCommand {
-    pub async fn handle(
+    pub async fn handle<R: GitHubRepoClient>(
         self,
-        client: &Arc<InstallationClient>,
-        database: &bb8::Pool<AsyncPgConnection>,
-        context: BrawlCommandContext,
+        conn: &mut AsyncPgConnection,
+        context: BrawlCommandContext<'_, R>,
     ) -> anyhow::Result<()> {
-        let mut conn = database.get().await.context("database get")?;
-
         match self {
-            BrawlCommand::DryRun(command) => dry_run::handle(client, &mut conn, context, command).await,
-            BrawlCommand::Merge(command) => merge::handle(client, &mut conn, context, command).await,
-            BrawlCommand::Retry => retry::handle(client, &mut conn, context).await,
-            BrawlCommand::Cancel => cancel::handle(client, &mut conn, context).await,
-            BrawlCommand::Ping => ping::handle(client, &mut conn, context).await,
-            BrawlCommand::PullRequest(command) => pr::handle(client, &mut conn, context, command).await,
+            BrawlCommand::DryRun(command) => dry_run::handle(conn, context, command).await,
+            BrawlCommand::Merge(command) => merge::handle(conn, context, command).await,
+            BrawlCommand::Retry => retry::handle(conn, context).await,
+            BrawlCommand::Cancel => cancel::handle(conn, context).await,
+            BrawlCommand::Ping => ping::handle(conn, context).await,
+            BrawlCommand::PullRequest(command) => pr::handle(conn, context, command).await,
         }
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum BrawlCommandError {
     NoCommand,
     InvalidCommand(String),
@@ -98,7 +66,7 @@ impl FromStr for BrawlCommand {
         let mut splits = lower.split_whitespace();
 
         let Some(command) = splits
-            .find(|s| matches!(*s, "?brawl" | "@brawl" | "/brawl"))
+            .find(|s| matches!(*s, "?brawl" | "@brawl" | "/brawl" | ">brawl"))
             .and_then(|_| splits.next())
         else {
             return Err(BrawlCommandError::NoCommand);
@@ -106,43 +74,23 @@ impl FromStr for BrawlCommand {
 
         match command {
             "merge" => {
-                let mut reviewers = Vec::new();
                 let mut priority = None;
 
-                for split in splits.by_ref() {
-                    if let Some(split) = split.strip_prefix("r=") {
-                        if split.is_empty() {
-                            tracing::debug!("invalid syntax, reviewer's name cannot be empty");
-                            return Err(BrawlCommandError::InvalidSyntax("reviewer's name cannot be empty".into()));
-                        }
-
-                        let splits = split.split(',');
-                        for reviewer in splits {
-                            if reviewer.is_empty() {
-                                tracing::debug!("invalid syntax, reviewer's name cannot be empty");
-                                return Err(BrawlCommandError::InvalidSyntax("reviewer's name cannot be empty".into()));
-                            }
-
-                            reviewers.push(reviewer.to_string());
-                        }
-                    } else if let Some(split) = split.strip_prefix("p=") {
-                        if split.is_empty() {
-                            tracing::debug!("invalid syntax, priority cannot be empty");
-                            return Err(BrawlCommandError::InvalidSyntax("priority cannot be empty".into()));
-                        }
-
-                        let Ok(p) = split.parse() else {
-                            tracing::debug!("invalid syntax, priority must be a positive integer");
-                            return Err(BrawlCommandError::InvalidSyntax("priority must be a positive integer".into()));
-                        };
-
-                        priority = Some(p);
-                    } else {
-                        break;
+                if let Some(split) = splits.next().and_then(|s| s.strip_prefix("p=")) {
+                    if split.is_empty() {
+                        tracing::debug!("invalid syntax, priority cannot be empty");
+                        return Err(BrawlCommandError::InvalidSyntax("priority cannot be empty".into()));
                     }
+
+                    let Ok(p) = split.parse::<u32>() else {
+                        tracing::debug!("invalid syntax, priority must be a positive integer");
+                        return Err(BrawlCommandError::InvalidSyntax("priority must be a positive integer".into()));
+                    };
+
+                    priority = Some(p as i32);
                 }
 
-                Ok(BrawlCommand::Merge(MergeCommand { reviewers, priority }))
+                Ok(BrawlCommand::Merge(MergeCommand { priority }))
             }
             "cancel" => Ok(BrawlCommand::Cancel),
             "try" => {
@@ -172,6 +120,101 @@ impl FromStr for BrawlCommand {
                 tracing::debug!("invalid command: {}", command);
                 Err(BrawlCommandError::InvalidCommand(command.into()))
             }
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse() {
+        let cases = [
+            (
+                "@brawl merge p=1",
+                Ok(BrawlCommand::Merge(MergeCommand { priority: Some(1) })),
+            ),
+            ("@brawl merge", Ok(BrawlCommand::Merge(MergeCommand { priority: None }))),
+            (
+                "@brawl merge p=12a",
+                Err(BrawlCommandError::InvalidSyntax("priority must be a positive integer".into())),
+            ),
+            (
+                "@brawl merge p=-12",
+                Err(BrawlCommandError::InvalidSyntax("priority must be a positive integer".into())),
+            ),
+            ("@brawl merge p abc", Ok(BrawlCommand::Merge(MergeCommand { priority: None }))),
+            (
+                "@brawl merge p=",
+                Err(BrawlCommandError::InvalidSyntax("priority cannot be empty".into())),
+            ),
+            ("@brawl cancel", Ok(BrawlCommand::Cancel)),
+            (
+                "@brawl try commit=1234567890 base=9876543210",
+                Ok(BrawlCommand::DryRun(DryRunCommand {
+                    head_sha: Some("1234567890".to_string()),
+                    base_sha: Some("9876543210".to_string()),
+                })),
+            ),
+            (
+                "@brawl try commit=1234567890",
+                Ok(BrawlCommand::DryRun(DryRunCommand {
+                    head_sha: Some("1234567890".to_string()),
+                    base_sha: None,
+                })),
+            ),
+            (
+                "@brawl try base=9876543210",
+                Ok(BrawlCommand::DryRun(DryRunCommand {
+                    head_sha: None,
+                    base_sha: Some("9876543210".to_string()),
+                })),
+            ),
+            (
+                "@brawl try base=9876543210 somethign else after",
+                Ok(BrawlCommand::DryRun(DryRunCommand {
+                    head_sha: None,
+                    base_sha: Some("9876543210".to_string()),
+                })),
+            ),
+            (
+                "@brawl try",
+                Ok(BrawlCommand::DryRun(DryRunCommand {
+                    head_sha: None,
+                    base_sha: None,
+                })),
+            ),
+            ("@brawl retry", Ok(BrawlCommand::Retry)),
+            ("@brawl ping", Ok(BrawlCommand::Ping)),
+            (
+                "?brawl try",
+                Ok(BrawlCommand::DryRun(DryRunCommand {
+                    head_sha: None,
+                    base_sha: None,
+                })),
+            ),
+            (
+                "/brawl try",
+                Ok(BrawlCommand::DryRun(DryRunCommand {
+                    head_sha: None,
+                    base_sha: None,
+                })),
+            ),
+            (
+                ">brawl try",
+                Ok(BrawlCommand::DryRun(DryRunCommand {
+                    head_sha: None,
+                    base_sha: None,
+                })),
+            ),
+            ("<no command>", Err(BrawlCommandError::NoCommand)),
+            ("@brawl @brawl merge", Err(BrawlCommandError::InvalidCommand("@brawl".into()))),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(BrawlCommand::from_str(input), expected);
         }
     }
 }

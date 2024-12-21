@@ -2,14 +2,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
-use installation::InstallationClient;
+use installation::{GitHubInstallationClient, InstallationClient};
 use octocrab::models::{AppId, Installation, InstallationId, RepositoryId, UserId};
 use octocrab::Octocrab;
 
-pub mod auto_start;
 pub mod config;
 pub mod installation;
-pub mod webhook;
+pub mod merge_workflow;
+pub mod messages;
+pub mod models;
+pub mod repo;
 
 pub struct GitHubService {
     client: Octocrab,
@@ -105,6 +107,3 @@ impl GitHubService {
         self.installations.lock().remove(&installation_id);
     }
 }
-
-pub use auto_start::{AutoStartConfig, AutoStartSvc};
-pub use webhook::{WebhookConfig, WebhookSvc};

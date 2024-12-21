@@ -35,7 +35,7 @@ anyhow = "1.0.85"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.1", features = ["env-filter"] }
 
-diesel = { version = "2.2.0", features = ["chrono", "large-tables"] }
+diesel = { version = "2.2.0", features = ["chrono"] }
 diesel-async = { version = "0.5.2", features = ["postgres", "bb8"] }
 futures = "0.3.31"
 chrono = "0.4.39"
@@ -51,3 +51,8 @@ sha2 = "0.10.6"
 toml = "0.8.19"
 thiserror = "2.0.6"
 uuid = "1.5.0"
+bon = "3.3"
+
+[dev-dependencies]
+insta = "1.2.0"
+sqlformat = "0.3.3"
