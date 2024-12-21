@@ -15,7 +15,8 @@ use scuffle_bootstrap_telemetry::opentelemetry_sdk::metrics::SdkMeterProvider;
 use scuffle_bootstrap_telemetry::opentelemetry_sdk::Resource;
 use scuffle_bootstrap_telemetry::prometheus_client::registry::Registry;
 use scuffle_brawl::database::schema::health_check;
-use scuffle_brawl::github::installation::{GitHubInstallationClient, InstallationClient, RepoClient};
+use scuffle_brawl::github::installation::{GitHubInstallationClient, InstallationClient};
+use scuffle_brawl::github::repo::RepoClient;
 use scuffle_brawl::github::GitHubService;
 use scuffle_metrics::opentelemetry::KeyValue;
 use tracing_subscriber::layer::SubscriberExt;
@@ -209,10 +210,16 @@ impl scuffle_brawl::auto_start::AutoStartConfig for Global {
         Ok(conn)
     }
 
-    fn repo_client(&self, repo_id: octocrab::models::RepositoryId) -> Option<Self::RepoClient> {
-        self.github_service
-            .get_client_by_repo(repo_id)
-            .and_then(|client| client.get_repository(repo_id))
+    async fn repo_client(&self, repo_id: octocrab::models::RepositoryId) -> anyhow::Result<Option<Self::RepoClient>> {
+        let Some(client) = self.github_service.get_client_by_repo(repo_id) else {
+            return Ok(None);
+        };
+
+        let Some(repo) = client.get_repository(repo_id).await? else {
+            return Ok(None);
+        };
+
+        Ok(Some(repo))
     }
 }
 

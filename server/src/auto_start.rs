@@ -8,14 +8,18 @@ use scuffle_context::ContextFutExt;
 
 use crate::database::ci_run::CiRun;
 use crate::database::pr::Pr;
-use crate::github::installation::GitHubRepoClient;
+use crate::github::merge_workflow::GitHubMergeWorkflow;
+use crate::github::repo::GitHubRepoClient;
 
 pub struct AutoStartSvc;
 
 pub trait AutoStartConfig: Send + Sync + 'static {
     type RepoClient: GitHubRepoClient;
 
-    fn repo_client(&self, repo_id: RepositoryId) -> Option<Self::RepoClient>;
+    fn repo_client(
+        &self,
+        repo_id: RepositoryId,
+    ) -> impl std::future::Future<Output = anyhow::Result<Option<Self::RepoClient>>> + Send;
 
     fn database(
         &self,
@@ -56,7 +60,7 @@ impl<C: AutoStartConfig> scuffle_bootstrap::Service<C> for AutoStartSvc {
             }
 
             for (_, run) in run_map {
-                let Some(repo_client) = global.repo_client(RepositoryId(run.github_repo_id as u64)) else {
+                let Some(repo_client) = global.repo_client(RepositoryId(run.github_repo_id as u64)).await? else {
                     tracing::error!("no installation client found for repo {}", run.github_repo_id);
                     continue;
                 };
@@ -88,9 +92,17 @@ async fn handle_run(
         .context("fetch pr")?;
 
     if run.started_at.is_none() {
-        run.start(conn, repo_client, &pr).await.context("start run")?;
+        repo_client
+            .merge_workflow()
+            .start(run, repo_client, conn, &pr)
+            .await
+            .context("start run")?;
     } else {
-        run.refresh(conn, repo_client, &pr).await.context("refresh run")?;
+        repo_client
+            .merge_workflow()
+            .refresh(run, repo_client, conn, &pr)
+            .await
+            .context("refresh run")?;
     }
 
     Ok(())

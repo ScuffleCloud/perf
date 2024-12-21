@@ -1,8 +1,8 @@
 use diesel_async::AsyncPgConnection;
 
 use super::BrawlCommandContext;
-use crate::github::installation::GitHubRepoClient;
 use crate::github::messages;
+use crate::github::repo::GitHubRepoClient;
 
 pub async fn handle<R: GitHubRepoClient>(
     _: &mut AsyncPgConnection,

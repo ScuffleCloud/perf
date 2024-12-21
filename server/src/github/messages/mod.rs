@@ -1,3 +1,4 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IssueMessage {
     CommitApproved(String),
     Error(String),
@@ -32,14 +33,20 @@ impl std::fmt::Display for IssueMessage {
     }
 }
 
-pub fn commit_approved(commit_link: impl std::fmt::Display, reviewers: impl std::fmt::Display) -> IssueMessage {
+pub fn commit_approved(
+    commit_link: impl std::fmt::Display,
+    requested_by: impl std::fmt::Display,
+    approved_by: impl std::fmt::Display,
+) -> IssueMessage {
     IssueMessage::CommitApproved(format!(
         include_str!("commit_approved.md"),
         commit_link = commit_link,
-        reviewers = reviewers
+        requested_by = requested_by,
+        approved_by = approved_by,
     ))
 }
 
+#[derive(Debug, Clone)]
 pub struct CommitMessage(String);
 
 impl AsRef<str> for CommitMessage {

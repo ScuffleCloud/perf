@@ -1,51 +1,14 @@
 use anyhow::Context;
-use chrono::{DateTime, Utc};
 use diesel::OptionalExtension;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use octocrab::models::RepositoryId;
-use serde::Deserialize;
 
 use crate::database::ci_run::CiRun;
 use crate::database::ci_run_check::CiCheck;
 use crate::database::pr::Pr;
-use crate::github::installation::GitHubRepoClient;
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CheckRunStatus {
-    Queued,
-    InProgress,
-    Completed,
-    Waiting,
-    Requested,
-    Pending,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CheckRunConclusion {
-    Success,
-    Failure,
-    Neutral,
-    Cancelled,
-    Skipped,
-    TimedOut,
-    ActionRequired,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CheckRunEvent {
-    pub id: i64,
-    pub name: String,
-    pub head_sha: String,
-    pub html_url: Option<String>,
-    pub details_url: Option<String>,
-    pub url: String,
-    pub started_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub status: CheckRunStatus,
-    pub conclusion: Option<CheckRunConclusion>,
-}
+use crate::github::merge_workflow::GitHubMergeWorkflow;
+use crate::github::models::CheckRunEvent;
+use crate::github::repo::GitHubRepoClient;
 
 pub async fn handle<R: GitHubRepoClient>(
     repo: &R,
@@ -83,7 +46,7 @@ pub async fn handle<R: GitHubRepoClient>(
         .context("fetch pr")?;
 
     if required {
-        run.refresh(conn, repo, &pr).await?;
+        repo.merge_workflow().refresh(&run, repo, conn, &pr).await?;
     }
 
     Ok(())

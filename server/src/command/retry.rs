@@ -5,8 +5,9 @@ use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use super::BrawlCommandContext;
 use crate::database::ci_run::CiRun;
 use crate::database::pr::Pr;
-use crate::github::installation::GitHubRepoClient;
+use crate::github::merge_workflow::GitHubMergeWorkflow;
 use crate::github::messages;
+use crate::github::repo::GitHubRepoClient;
 
 pub async fn handle<R: GitHubRepoClient>(
     conn: &mut AsyncPgConnection,
@@ -66,16 +67,20 @@ pub async fn handle<R: GitHubRepoClient>(
         .priority(run.priority)
         .requested_by_id(context.user.id.0 as i64)
         .is_dry_run(run.is_dry_run)
+        .approved_by_ids(run.approved_by_ids)
         .build()
         .query()
         .get_result(conn)
         .await?;
 
     if run.is_dry_run {
-        run.start(conn, context.repo, &pr).await?;
+        context.repo.merge_workflow().start(&run, context.repo, conn, &pr).await?;
     } else {
-        run.queued(context.repo, &pr).await?;
+        context.repo.merge_workflow().queued(&run, context.repo).await?;
     }
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {}

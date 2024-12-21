@@ -22,7 +22,8 @@ use sha2::Sha256;
 pub mod check_event;
 
 use crate::command::{BrawlCommand, BrawlCommandContext, PullRequestCommand};
-use crate::github::installation::{GitHubInstallationClient, GitHubRepoClient};
+use crate::github::installation::GitHubInstallationClient;
+use crate::github::repo::GitHubRepoClient;
 
 pub trait WebhookConfig: Send + Sync + 'static {
     type InstallationClient: GitHubInstallationClient;
@@ -308,11 +309,13 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
                 return Ok(());
             };
 
-            let Some(repo_client) = client.get_repository(repo_id) else {
+            let Some(repo_client) = client.get_repository(repo_id).await? else {
                 return Ok(());
             };
 
-            repo_client.set_pull_request(pull_request_event.pull_request.clone()).await;
+            repo_client
+                .set_pull_request(pull_request_event.pull_request.clone().into())
+                .await;
 
             let pr = repo_client
                 .get_pull_request(pull_request_event.pull_request.number)
@@ -354,7 +357,7 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
                 return Ok(());
             };
 
-            let Some(repo_client) = client.get_repository(repo.id) else {
+            let Some(repo_client) = client.get_repository(repo.id).await? else {
                 return Ok(());
             };
 
@@ -373,7 +376,7 @@ async fn handle_event<C: WebhookConfig>(global: Arc<C>, mut event: WebhookEvent)
         }
         WebhookEventPayload::CheckRun(check_run_event) => {
             let repo = event.repository.context("missing repository")?;
-            let Some(repo_client) = client.get_repository(repo.id) else {
+            let Some(repo_client) = client.get_repository(repo.id).await? else {
                 return Ok(());
             };
 

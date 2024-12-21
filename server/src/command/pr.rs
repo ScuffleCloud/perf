@@ -6,8 +6,9 @@ use super::BrawlCommandContext;
 use crate::database::ci_run::CiRun;
 use crate::database::enums::GithubCiRunStatus;
 use crate::database::pr::Pr;
-use crate::github::installation::GitHubRepoClient;
+use crate::github::merge_workflow::GitHubMergeWorkflow;
 use crate::github::messages;
+use crate::github::repo::GitHubRepoClient;
 
 #[derive(Debug)]
 pub enum PullRequestCommand {
@@ -53,7 +54,7 @@ pub async fn handle<R: GitHubRepoClient>(
             .context("fetch ci run")?
         {
             if !run.is_dry_run {
-                run.cancel(conn, context.repo).await?;
+                context.repo.merge_workflow().cancel(&run, context.repo, conn).await?;
                 context
                     .repo
                     .send_message(

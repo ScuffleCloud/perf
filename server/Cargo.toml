@@ -55,3 +55,4 @@ bon = "3.3"
 
 [dev-dependencies]
 insta = "1.2.0"
+sqlformat = "0.3.3"

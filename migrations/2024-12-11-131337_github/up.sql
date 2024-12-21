@@ -33,10 +33,8 @@ CREATE TABLE github_pr (
     merge_status github_pr_merge_status NOT NULL,
     -- The ID of the user who created the PR (on GitHub)
     author_id BIGINT NOT NULL,
-    -- The IDs of the users who reviewed the PR (via the Brawl command) (max 10 - no nulls)
-    reviewer_ids BIGINT[] NOT NULL CHECK (array_length(reviewer_ids, 1) <= 10 AND array_position(reviewer_ids, NULL) IS NULL),
-    -- The IDs of the users who are assigned to the PR (on GitHub) (max 10 - no nulls)
-    assigned_ids BIGINT[] NOT NULL CHECK (array_length(assigned_ids, 1) <= 10 AND array_position(assigned_ids, NULL) IS NULL),
+    -- The IDs of the users who are assigned to the PR (on GitHub) (no nulls)
+    assigned_ids BIGINT[] NOT NULL CHECK (array_position(assigned_ids, NULL) IS NULL),
     -- The status of the PR (on GitHub)
     status github_pr_status NOT NULL,
     -- The SHA of the merge commit (if the PR was merged)
@@ -88,6 +86,9 @@ CREATE TABLE github_ci_runs (
     ci_branch TEXT NOT NULL,
     -- The priority of the CI run (higher priority runs are run first)
     priority INT NOT NULL,
+    -- The IDs of the users who approved the CI run (on GitHub) (no nulls)
+    -- This is set to the list of users who have review permission & approved the PR prior to the run being queued.
+    approved_by_ids BIGINT[] NOT NULL CHECK (array_position(approved_by_ids, NULL) IS NULL),
     -- The ID of the user who requested the CI run (on GitHub)
     requested_by_id BIGINT NOT NULL,
     -- Is dry run?

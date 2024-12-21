@@ -6,10 +6,12 @@ use installation::{GitHubInstallationClient, InstallationClient};
 use octocrab::models::{AppId, Installation, InstallationId, RepositoryId, UserId};
 use octocrab::Octocrab;
 
-pub mod ci;
 pub mod config;
 pub mod installation;
+pub mod merge_workflow;
 pub mod messages;
+pub mod models;
+pub mod repo;
 
 pub struct GitHubService {
     client: Octocrab,
@@ -66,7 +68,7 @@ impl GitHubService {
         self.installations
             .lock()
             .values()
-            .find(|client| client.get_repository(repo_id).is_some())
+            .find(|client| client.has_repository(repo_id))
             .cloned()
     }
 

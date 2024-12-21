@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 /// A macro helper to implement the `ToSql` and `FromSql` traits for an enum.
 /// Unfortunately diesel doesn't automatically generate these for enums, so we
 /// have to do it manually. This means we need to make sure that this enum

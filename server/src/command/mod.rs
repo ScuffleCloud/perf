@@ -4,10 +4,9 @@ use std::sync::Arc;
 use diesel_async::AsyncPgConnection;
 use dry_run::DryRunCommand;
 use merge::MergeCommand;
-use octocrab::models::pulls::PullRequest;
-use octocrab::models::{Author, UserId, UserProfile};
 
-use crate::github::installation::GitHubRepoClient;
+use crate::github::models::{PullRequest, User};
+use crate::github::repo::GitHubRepoClient;
 
 mod cancel;
 mod dry_run;
@@ -25,30 +24,6 @@ pub enum BrawlCommand {
     Cancel,
     Ping,
     PullRequest(PullRequestCommand),
-}
-
-#[derive(Debug)]
-pub struct User {
-    pub id: UserId,
-    pub login: String,
-}
-
-impl From<UserProfile> for User {
-    fn from(user: UserProfile) -> Self {
-        Self {
-            id: user.id,
-            login: user.login,
-        }
-    }
-}
-
-impl From<Author> for User {
-    fn from(author: Author) -> Self {
-        Self {
-            id: author.id,
-            login: author.login,
-        }
-    }
 }
 
 pub struct BrawlCommandContext<'a, R> {
@@ -97,43 +72,23 @@ impl FromStr for BrawlCommand {
 
         match command {
             "merge" => {
-                let mut reviewers = Vec::new();
                 let mut priority = None;
 
-                for split in splits.by_ref() {
-                    if let Some(split) = split.strip_prefix("r=") {
-                        if split.is_empty() {
-                            tracing::debug!("invalid syntax, reviewer's name cannot be empty");
-                            return Err(BrawlCommandError::InvalidSyntax("reviewer's name cannot be empty".into()));
-                        }
-
-                        let splits = split.split(',');
-                        for reviewer in splits {
-                            if reviewer.is_empty() {
-                                tracing::debug!("invalid syntax, reviewer's name cannot be empty");
-                                return Err(BrawlCommandError::InvalidSyntax("reviewer's name cannot be empty".into()));
-                            }
-
-                            reviewers.push(reviewer.to_string());
-                        }
-                    } else if let Some(split) = split.strip_prefix("p=") {
-                        if split.is_empty() {
-                            tracing::debug!("invalid syntax, priority cannot be empty");
-                            return Err(BrawlCommandError::InvalidSyntax("priority cannot be empty".into()));
-                        }
-
-                        let Ok(p) = split.parse() else {
-                            tracing::debug!("invalid syntax, priority must be a positive integer");
-                            return Err(BrawlCommandError::InvalidSyntax("priority must be a positive integer".into()));
-                        };
-
-                        priority = Some(p);
-                    } else {
-                        break;
+                if let Some(split) = splits.next().and_then(|s| s.strip_prefix("p=")) {
+                    if split.is_empty() {
+                        tracing::debug!("invalid syntax, priority cannot be empty");
+                        return Err(BrawlCommandError::InvalidSyntax("priority cannot be empty".into()));
                     }
+
+                    let Ok(p) = split.parse() else {
+                        tracing::debug!("invalid syntax, priority must be a positive integer");
+                        return Err(BrawlCommandError::InvalidSyntax("priority must be a positive integer".into()));
+                    };
+
+                    priority = Some(p);
                 }
 
-                Ok(BrawlCommand::Merge(MergeCommand { reviewers, priority }))
+                Ok(BrawlCommand::Merge(MergeCommand { priority }))
             }
             "cancel" => Ok(BrawlCommand::Cancel),
             "try" => {

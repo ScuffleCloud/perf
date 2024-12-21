@@ -22,8 +22,8 @@ test *args:
 
     # Do not generate the coverage report on CI
     cargo +nightly insta review
-    cargo +nightly llvm-cov report --html
     cargo +nightly llvm-cov report --lcov --output-path ./lcov.info
+    cargo +nightly llvm-cov report --html
 
 # Runs cargo deny
 deny *args:
