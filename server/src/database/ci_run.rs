@@ -33,7 +33,7 @@ impl CiRun<'_> {
         super::schema::github_ci_runs::dsl::github_ci_runs
             .filter(super::schema::github_ci_runs::github_repo_id.eq(repo_id.0 as i64))
             .filter(super::schema::github_ci_runs::github_pr_number.eq(pr_number as i32))
-            .order(super::schema::github_ci_runs::created_at.desc())
+            .order(super::schema::github_ci_runs::id.desc())
             .limit(1)
             .select(CiRun::as_select())
     }
@@ -431,7 +431,7 @@ mod tests {
         AND ("github_ci_runs"."github_pr_number" = $2)
       )
     ORDER BY
-      "github_ci_runs"."created_at" DESC
+      "github_ci_runs"."id" DESC
     LIMIT
       $3 -- binds: [1, 1, 1]
     "#,

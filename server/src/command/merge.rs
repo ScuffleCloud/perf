@@ -12,7 +12,7 @@ use crate::github::merge_workflow::GitHubMergeWorkflow;
 use crate::github::messages;
 use crate::github::repo::GitHubRepoClient;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MergeCommand {
     pub priority: Option<i32>,
 }
@@ -108,6 +108,7 @@ mod tests {
     use octocrab::models::UserId;
 
     use super::*;
+    use crate::command::BrawlCommand;
     use crate::database::get_test_connection;
     use crate::github::config::{GitHubBrawlRepoConfig, Permission};
     use crate::github::models::{PrBranch, PullRequest, Review, User};
@@ -148,40 +149,40 @@ mod tests {
         });
 
         let task = tokio::spawn(async move {
-            handle(
-                &mut conn,
-                BrawlCommandContext {
-                    repo: &client,
-                    pr: Arc::new(PullRequest {
-                        number: 1,
-                        head: PrBranch {
-                            sha: "head_sha".to_string(),
-                            label: Some("head".to_string()),
-                            ref_field: "head".to_string(),
-                        },
-                        base: PrBranch {
-                            sha: "base_sha".to_string(),
-                            label: Some("base".to_string()),
-                            ref_field: "base".to_string(),
-                        },
-                        requested_reviewers: vec![
-                            User {
-                                id: UserId(1),
-                                login: "test".to_string(),
+            BrawlCommand::Merge(MergeCommand { priority: Some(100) })
+                .handle(
+                    &mut conn,
+                    BrawlCommandContext {
+                        repo: &client,
+                        pr: Arc::new(PullRequest {
+                            number: 1,
+                            head: PrBranch {
+                                sha: "head_sha".to_string(),
+                                label: Some("head".to_string()),
+                                ref_field: "head".to_string(),
                             },
-                            User {
-                                id: UserId(2),
-                                login: "test2".to_string(),
+                            base: PrBranch {
+                                sha: "base_sha".to_string(),
+                                label: Some("base".to_string()),
+                                ref_field: "base".to_string(),
                             },
-                        ],
-                        ..Default::default()
-                    }),
-                    user: User::default(),
-                },
-                MergeCommand { priority: Some(100) },
-            )
-            .await
-            .unwrap();
+                            requested_reviewers: vec![
+                                User {
+                                    id: UserId(1),
+                                    login: "test".to_string(),
+                                },
+                                User {
+                                    id: UserId(2),
+                                    login: "test2".to_string(),
+                                },
+                            ],
+                            ..Default::default()
+                        }),
+                        user: User::default(),
+                    },
+                )
+                .await
+                .unwrap();
 
             (conn, client)
         });

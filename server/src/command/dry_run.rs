@@ -10,7 +10,7 @@ use crate::github::merge_workflow::GitHubMergeWorkflow;
 use crate::github::messages;
 use crate::github::repo::GitHubRepoClient;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct DryRunCommand {
     pub head_sha: Option<String>,
     pub base_sha: Option<String>,
@@ -92,8 +92,7 @@ pub async fn handle<R: GitHubRepoClient>(
                             "This PR already has a active merge {}",
                             match run.status {
                                 GithubCiRunStatus::Queued => "queued",
-                                GithubCiRunStatus::InProgress => "in progress",
-                                status => unreachable!("impossible CI status: {:?}", status),
+                                _ => "in progress",
                             }
                         )
                     })),
@@ -147,6 +146,7 @@ mod tests {
     use octocrab::models::UserId;
 
     use super::*;
+    use crate::command::BrawlCommand;
     use crate::github::config::{GitHubBrawlRepoConfig, Permission};
     use crate::github::models::{Commit, PrBranch, PullRequest, User};
     use crate::github::repo::test_utils::{MockRepoAction, MockRepoClient};
@@ -244,7 +244,11 @@ mod tests {
         };
 
         let task = tokio::spawn(async move {
-            handle(
+            BrawlCommand::DryRun(DryRunCommand {
+                head_sha: None,
+                base_sha: None,
+            })
+            .handle(
                 &mut conn,
                 BrawlCommandContext {
                     repo: &client,
@@ -253,10 +257,6 @@ mod tests {
                         id: UserId(3),
                         login: "test".to_string(),
                     },
-                },
-                DryRunCommand {
-                    head_sha: None,
-                    base_sha: None,
                 },
             )
             .await

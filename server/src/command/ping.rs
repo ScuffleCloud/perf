@@ -35,6 +35,7 @@ mod tests {
     use octocrab::models::UserId;
 
     use super::*;
+    use crate::command::BrawlCommand;
     use crate::database::get_test_connection;
     use crate::github::merge_workflow::GitHubMergeWorkflow;
     use crate::github::models::{PullRequest, User};
@@ -50,19 +51,20 @@ mod tests {
         let (client, mut rx) = MockRepoClient::new(MockMergeWorkFlow);
 
         tokio::spawn(async move {
-            handle(
-                &mut conn,
-                BrawlCommandContext {
-                    repo: &client,
-                    pr: Arc::new(PullRequest::default()),
-                    user: User {
-                        id: UserId(1),
-                        login: "troy".to_string(),
+            BrawlCommand::Ping
+                .handle(
+                    &mut conn,
+                    BrawlCommandContext {
+                        repo: &client,
+                        pr: Arc::new(PullRequest::default()),
+                        user: User {
+                            id: UserId(1),
+                            login: "troy".to_string(),
+                        },
                     },
-                },
-            )
-            .await
-            .unwrap();
+                )
+                .await
+                .unwrap();
         });
 
         match rx.recv().await.unwrap() {

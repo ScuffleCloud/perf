@@ -62,6 +62,7 @@ pub mod tests {
     use octocrab::models::UserId;
 
     use super::*;
+    use crate::command::BrawlCommand;
     use crate::database::ci_run::Base;
     use crate::github::config::{GitHubBrawlRepoConfig, Permission};
     use crate::github::models::{PullRequest, User};
@@ -98,7 +99,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_cancel_try() {
+    async fn test_cancel_try_command() {
         let mut conn = crate::database::get_test_connection().await;
 
         let mock = MockMergeWorkflow {
@@ -137,19 +138,20 @@ pub mod tests {
             .unwrap();
 
         let task = tokio::spawn(async move {
-            handle(
-                &mut conn,
-                BrawlCommandContext {
-                    repo: &client,
-                    pr: Arc::new(pr),
-                    user: User {
-                        id: UserId(1),
-                        login: "test".to_string(),
+            BrawlCommand::Cancel
+                .handle(
+                    &mut conn,
+                    BrawlCommandContext {
+                        repo: &client,
+                        pr: Arc::new(pr),
+                        user: User {
+                            id: UserId(1),
+                            login: "test".to_string(),
+                        },
                     },
-                },
-            )
-            .await
-            .unwrap();
+                )
+                .await
+                .unwrap();
 
             (conn, client)
         });
